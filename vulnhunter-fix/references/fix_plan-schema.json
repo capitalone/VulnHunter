@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vulnhunter-fix/references/fix_plan-schema.json",
+  "title": "VulnHunter-Fix per-finding fix plan",
+  "description": "Schema for the plan artifact produced by Phase 2 (Plan) per finding. Includes pre-classification (REQ-HON-002) and crypto_trust_chain (REQ-CWE-007) fields.",
+  "type": "object",
+  "required": [
+    "vuln_id",
+    "cwe",
+    "strategy",
+    "files_to_change",
+    "why_this_works",
+    "projected_completeness_tier",
+    "tier_judgment"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "vuln_id": {
+      "type": "string",
+      "pattern": "^VULN-\\d+$"
+    },
+    "cwe": {
+      "type": "string",
+      "pattern": "^CWE-\\d+$"
+    },
+    "strategy": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One-paragraph strategy summary."
+    },
+    "files_to_change": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1
+    },
+    "why_this_works": {
+      "type": "string",
+      "minLength": 1
+    },
+    "projected_completeness_tier": {
+      "type": "string",
+      "enum": ["FULL", "MITIGATION", "WORKAROUND"],
+      "description": "Terminal projection per REQ-HON-002. Compared against post-fix reclassification (REQ-HON-003); mismatch triggers repair loop."
+    },
+    "projected_residual_vectors": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "description": "Vectors that will remain open under this plan. Must be non-empty when projected tier != FULL."
+    },
+    "callers_routed_coverage": {
+      "type": "string",
+      "enum": ["superset", "subset", "unknown"],
+      "description": "SCH-2 / REQ-GRA-019: coverage of graph.callers_of(sink_symbol) by the plan's remediated call sites. `superset` = plan routes every caller through the safe pathway (required for FULL tier). `subset` = plan misses at least one caller (tier can be at most MITIGATION). `unknown` = graph backend was grep-only or symbol not resolvable. Read by scripts/compute-completeness-tier.py to gate the `full.callers_routed_through_fix` signal."
+    },
+    "discrimination_evidence": {
+      "type": ["object", "null"],
+      "description": "SCH-2 backward-compat slot: worker results carry this on `result.discrimination_evidence`; the classifier reads there first. If a plan-phase producer chooses to emit it (rare), the classifier accepts it here too.",
+      "properties": {
+        "pre_fix_result": {"type": "string", "enum": ["fail", "pass"]},
+        "post_fix_result": {"type": "string", "enum": ["fail", "pass"]}
+      },
+      "additionalProperties": true
+    },
+    "tier_judgment": {
+      "$ref": "result-schema.json#/$defs/tierJudgment",
+      "description": "Populated when the plan-phase classifier returned LLM_REVIEW and the bounded LLM fallback was invoked (REQ-HON-016)."
+    },
+    "crypto_trust_chain": {
+      "type": "object",
+      "description": "Required for findings routed to worker_agent_crypto.md (REQ-CWE-007). Booleans lifted from the triage sidecar (REQ-CWE-008); the worker must not modify them.",
+      "required": [
+        "algorithm_approved",
+        "key_source_approved",
+        "key_rotation_present",
+        "transport_encrypted"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm_approved": {"type": "boolean"},
+        "key_source_approved": {"type": "boolean"},
+        "key_rotation_present": {"type": "boolean"},
+        "transport_encrypted": {"type": "boolean"}
+      }
+    },
+    "adapter_language": {
+      "type": ["string", "null"],
+      "enum": ["go", "java", "python", "typescript", "javascript", null],
+      "description": "Repo-type adapter selected in Phase 2 per REQ-CWE-005."
+    },
+    "worker_prompt": {
+      "type": ["string", "null"],
+      "enum": [
+        "worker_agent_authz.md",
+        "worker_agent_injection.md",
+        "worker_agent_crypto.md",
+        "worker_agent_resource.md",
+        "worker_agent_config.md",
+        null
+      ],
+      "description": "CWE-class worker prompt selected in Phase 2 per REQ-CWE-004."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"projected_completeness_tier": {"const": "FULL"}},
+        "required": ["projected_completeness_tier"]
+      },
+      "then": {
+        "properties": {
+          "projected_residual_vectors": {"maxItems": 0}
+        }
+      },
+      "else": {
+        "properties": {
+          "projected_residual_vectors": {"minItems": 1}
+        },
+        "required": ["projected_residual_vectors"]
+      }
+    }
+  ]
+}

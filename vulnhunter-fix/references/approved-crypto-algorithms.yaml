@@ -1,0 +1,111 @@
+# Approved cryptographic algorithms
+# Referenced by: REQ-CWE-009 (algorithm_approved checker).
+# Consumed by: scripts/crypto-trust-chain-checkers.py (task-38).
+#
+# The checker AST-scans the fix diff and matches against these
+# identifiers. A match on a symmetric algorithm sets algorithm_approved=true;
+# no match → false → MITIGATION tier for the crypto finding.
+
+symmetric:
+  # AEAD modes required
+  - AES-GCM
+  - AES-256-GCM
+  - AES-128-GCM
+  - ChaCha20-Poly1305
+  - XChaCha20-Poly1305
+
+# Deprecated / never approved (explicit deny list — matches here force false).
+# Matching is case-insensitive per crypto-trust-chain-checkers.py; include
+# language-native aliases so a Java `DESede` or Python `hashlib.sha1` matches
+# the same way as a canonical `3DES` or `SHA-1`.
+symmetric_denied:
+  - DES
+  - 3DES
+  - DESede
+  - RC2
+  - RC4
+  - Blowfish
+  - AES-ECB
+  - AES/ECB
+  - AES-CBC        # without HMAC construction; use GCM instead
+  - AES/CBC
+  - crypto/des
+  - modes.ECB(     # Python cryptography idiom — the strings above miss it
+  - MODE_ECB       # pycryptodome (AES.MODE_ECB)
+  - PKCS5Padding    # padding oracle risk when paired with CBC
+  - PKCS7Padding
+
+asymmetric:
+  - Ed25519
+  - Ed448
+  - X25519
+  - X448
+  - RSA-OAEP-SHA256
+  - RSA-PSS-SHA256
+  - ECDSA-P256
+  - ECDSA-P384
+
+asymmetric_denied:
+  - RSA-PKCS1v15   # padding oracles
+  - DSA
+  - ECDSA-P224
+
+hash:
+  - SHA-256
+  - SHA-384
+  - SHA-512
+  - SHA-3-256
+  - SHA-3-512
+  - BLAKE2b
+  - BLAKE2s
+
+hash_denied:
+  - MD5
+  - md5.New
+  - hashlib.md5
+  - .MD5(
+  - MessageDigest.getInstance("MD5"
+  - SHA-1
+  - SHA1
+  - sha1.New
+  - hashlib.sha1
+  - MessageDigest.getInstance("SHA1"
+  - MessageDigest.getInstance("SHA-1"
+  - MD4
+
+# Key derivation functions
+kdf:
+  - HKDF               # any hash
+  - HKDF-SHA256
+  - HKDF-SHA512
+  - PBKDF2-HMAC-SHA256 # min iterations 100000 checked separately
+  - PBKDF2-HMAC-SHA512
+  - Argon2id
+  - scrypt             # N >= 2^15 checked separately
+
+kdf_denied:
+  - PBKDF1
+  - PBKDF2-HMAC-SHA1
+  - MD5-crypt
+
+# Message authentication
+mac:
+  - HMAC-SHA256
+  - HMAC-SHA512
+  - Poly1305           # only as part of ChaCha20-Poly1305
+
+mac_denied:
+  - HMAC-MD5
+  - HmacMD5
+  - HMAC-SHA1
+  - HmacSHA1
+  - hmac.new(key, msg, hashlib.md5
+  - hmac.new(key, msg, hashlib.sha1
+
+# Constants used by the checker for parameter validation
+constants:
+  pbkdf2_min_iterations: 100000
+  argon2_min_memory_kb: 65536
+  argon2_min_iterations: 3
+  rsa_min_bits: 3072
+  ecc_min_bits: 256

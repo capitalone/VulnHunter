@@ -1,0 +1,12 @@
+{
+  "source_commit": "a06a5e3608d67ad7112401534581c6de7886b518",
+  "synced_at": "2026-07-13",
+  "additional_sources": [
+    {
+      "component": "vulnhunter-fix/",
+      "commit": "7c5df543ac7484df42ebadd207ad2873227310c8"
+    }
+  ],
+  "note": "Provenance marker for the public export produced by the sanitize-and-sync process. 'source_commit' is the internal source-of-truth commit the top-level tree (skill/, skill-fix-verify/, local_harness/, tests/local_harness/) was synced from. 'additional_sources' record other components exported from separate internal repos, keyed by the destination subtree; each 'commit' is that subtree's upstream baseline for the next re-sync (diff commit..HEAD). All values are opaque SHAs and do not expose internal code; the internal repo names are recorded only in the internal difference log, not here."
+}
+

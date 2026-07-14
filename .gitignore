@@ -1,0 +1,61 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Distribution / packaging
+.Python
+build/
+dist/
+var/
+wheels/
+*.egg-info/
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# OS
+.DS_Store
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+
+# VulnHunt working directory
+.vulnhunt/
+
+# Harness runtime artifacts (generated locally, never committed)
+benchmark_repos/
+benchmark_results/
+finding_history.json
+repos_being_scanned/
+clones/
+
+# Agent runtime artifacts
+verify_runs/
+config.toml
+
+# vulnhunter-fix runtime/work dirs (generated locally, never committed)
+work/
+.vulnhunter-fix/
+.installed-from
+
+# Stray dir from a mis-quoted URL (e.g. a test writing "https://..." as a path)
+https:/
+

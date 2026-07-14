@@ -1,0 +1,83 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools"]
+
+[project]
+name = "c1-vulnhunter-fix"
+dynamic = ["version"]
+description = "Python shared library for vulnhunter-fix"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["jsonschema>=4.18"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: OS Independent"
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov"]
+# AST graph backend. Optional: the graph builder falls back to grep when
+# graphifyy is absent (REQ-GRA-006). Pin must match preflight.py REQ-GRA-001
+# and install.sh's bundled-venv install.
+graph = ["graphifyy>=0.8.14,<0.9.0"]
+
+[project.urls]
+github = "https://github.com/capitalone/vulnhunter"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vulnhunter_fix"]
+
+[tool.setuptools.dynamic]
+version = {attr = "vulnhunter_fix.__version__"}
+
+[tool.mypy]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+filterwarnings = [
+    "error",
+]
+markers = [
+    "contract: cross-artifact contract test — schema vs producer, prompt vs schema. Guards against the class of drift bug peer review 1 (B1) and Review 4 (SCH-1..SCH-5) surfaced.",
+]
+
+[tool.coverage.run]
+branch = true
+# `parallel = true` makes subprocess invocations write their own
+# `.coverage.<pid>` files; the auto-installed `coverage.pth` hook in
+# the venv calls coverage.process_startup() when COVERAGE_PROCESS_START
+# is set (see tests/conftest.py). Without parallel mode subprocess
+# data would clobber the parent's coverage file.
+parallel = true
+source = ["scripts"]
+omit = [
+    # TODO: add integration tests covering parse_vulnhunter_results
+    # (the README-extraction main path) and the code-smell / detail
+    # parsers; only the hash/regex helpers are unit-tested today.
+    "scripts/parse_results.py",
+    # TODO: add tests for the tool-version probe functions
+    # (check_python_version, check_gh_version, etc.) and main()
+    # orchestration; only the in-place-mode helpers are tested.
+    "scripts/preflight.py",
+]
+
+[tool.coverage.paths]
+# Subprocess data files record absolute paths; this section folds
+# them back into the canonical source paths during `coverage combine`.
+source = [
+    "scripts/",
+    "*/scripts/",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

@@ -1,0 +1,9 @@
+# REPO_LIST.txt — one GitHub repository URL per line for ad-hoc batch scanning.
+#
+# Lines starting with '#' and blank lines are ignored.
+# The batch runner clones each repo (at HEAD) and runs /vulnhunt against it.
+#
+# Replace the example below with the repositories you want to scan.
+# Point only at repositories you are authorized to scan.
+
+https://github.com/OWASP/NodeGoat

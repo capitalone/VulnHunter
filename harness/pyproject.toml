@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "c1-vulnhunter-harness"
+version = "0.1.0"
+description = "Dev-only harness for driving /vulnhunt across many repositories in batch, plus a detection-accuracy benchmark."
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["local_harness*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.coverage.run]
+branch = true
+source = ["local_harness"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

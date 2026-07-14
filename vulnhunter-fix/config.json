@@ -1,0 +1,59 @@
+{
+  "github": {
+    "host": "github.com",
+    "ssl_verify": true,
+    "default_base_branch": "main",
+    "default_target_org": "your-org",
+    "fork_org": "your-fork-org",
+    "fork_prefix": "vulnhunter-fix",
+    "pr_draft": true,
+    "pr_labels": ["security", "vulnhunter-fix"]
+  },
+  "git": {
+    "branch_prefix": "vulnfix"
+  },
+  "verification": {
+    "max_retries": 2,
+    "max_repair_attempts": 3,
+    "test_timeout_seconds": 120
+  },
+  "behavior": {
+    "auto_fork_on_no_access": true,
+    "fork_visibility": "private",
+    "deliver_to_fork_only": true,
+    "fallback_to_issue": true,
+    "confirm_before_push": false,
+    "work_dir": "./work"
+  },
+  "models": {
+    "override": null,
+    "default": "sonnet",
+    "routing": {
+      "opus": {
+        "description": "Critical severity, complex CWEs (auth/crypto/deserialization) at High+ severity, or multi-file changes",
+        "severity": ["Critical"],
+        "cwe_prefixes": ["CWE-287", "CWE-295", "CWE-327", "CWE-330", "CWE-345", "CWE-502", "CWE-611"],
+        "cwe_requires_severity": ["Critical", "High"],
+        "if_multi_file": true
+      },
+      "sonnet": {
+        "description": "High severity or moderate CWEs (injection, path traversal, XSS, CSRF, SSRF)",
+        "severity": ["High"],
+        "cwe_prefixes": ["CWE-22", "CWE-78", "CWE-79", "CWE-89", "CWE-94", "CWE-352", "CWE-434", "CWE-918"]
+      },
+      "haiku": {
+        "description": "Low/Medium severity, single-file, simple CWEs (missing headers, log injection, info disclosure)",
+        "severity": ["Low", "Medium"],
+        "cwe_prefixes": ["CWE-117", "CWE-200", "CWE-312", "CWE-319", "CWE-532", "CWE-693", "CWE-1021"]
+      }
+    }
+  },
+  "collaborators_file": "collaborators.json",
+  "modes": {
+    "default": "auto",
+    "in_place": {
+      "_close_issue_on_deliver_deprecated_": "Ignored by in-place mode. Source issues are NEVER closed at delivery time — the PR's `Closes #N` keyword auto-closes them on merge. Closing earlier would trigger verify against unmerged code and reject the fix. Key kept under a renamed name so an old config doesn't accidentally re-enable the broken behavior.",
+      "publish_repo_aliases": {}
+    }
+  }
+}

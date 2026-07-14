@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/capitalone/vulnhunter/verify_disposition.schema.json",
+  "title": "VulnHunter fix-verification disposition",
+  "description": "Per-vulnerability fix-verification verdict written by the /vulnhunt-fix-verify skill at <out>/verify_disposition.json on every successful run. The skill is read-only over the target repo; verdicts are based on static reasoning over the supplied checkout. Defined by docs/vulnhunt-fix-verify-design.md §9.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scan_id",
+    "target_repo",
+    "verified_at",
+    "comments_evaluation",
+    "dispositions"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Disposition schema version. Constant for this schema file; consumers fail-closed if it differs.",
+      "const": "1"
+    },
+    "scan_id": {
+      "description": "Original scan identifier. Equals the results-directory basename: <repo>_VULNHUNT_RESULTS_<model>_<UTC-timestamp>.",
+      "type": "string",
+      "pattern": "^.+_VULNHUNT_RESULTS_.+$"
+    },
+    "target_repo": {
+      "description": "Identifies the fixed-code checkout the verdict was rendered against.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "head_commit", "head_ref", "additional_repos"],
+      "properties": {
+        "path": {
+          "description": "Absolute path of the fixed-code checkout passed in as `repo`.",
+          "type": "string"
+        },
+        "head_commit": {
+          "description": "HEAD commit SHA at verify time, read from <repo>/.git/HEAD. Empty string if not derivable via Read (e.g. no .git directory, worktree, unexpected packed-refs format).",
+          "type": "string",
+          "oneOf": [
+            { "pattern": "^[0-9a-f]{7,40}$" },
+            { "const": "" }
+          ]
+        },
+        "head_ref": {
+          "description": "Symbolic ref name (branch/tag) or 'detached'. Empty string if not derivable.",
+          "type": "string"
+        },
+        "additional_repos": {
+          "description": "Additional read-only checkouts the caller supplied via `additional_repos` on the kickoff prompt. Empty array when none were supplied. Recorded for audit so a downstream reader can tell which sources the verifier was allowed to consult when reaching the verdict. Together with `path`, these form the set of trusted roots.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "verified_at": {
+      "description": "UTC ISO-8601 timestamp when the verdict was written.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "comments_evaluation": { "$ref": "#/$defs/comments_evaluation" },
+    "dispositions": {
+      "description": "One entry per VULN-NNN in the caller's `fixed` argument. Empty array is not valid — at least one finding must be verified.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/disposition" }
+    }
+  },
+  "$defs": {
+    "vuln_id": {
+      "description": "Scan-local finding identifier. Zero-padded 3-digit form (VULN-001), matching scan_manifest.schema.json #/$defs/vuln_id.",
+      "type": "string",
+      "pattern": "^VULN-\\d{3}$"
+    },
+    "verdict": {
+      "description": "Per-finding verdict. FIXED=all applicable gates pass; NOT_FIXED=sink still reachable with attacker-controlled input; PARTIAL=primary instance fixed but sweep or class-elimination gate failed; INCONCLUSIVE=cannot answer from static reasoning; INVALID_INPUT=finding id not in report.",
+      "enum": ["FIXED", "NOT_FIXED", "PARTIAL", "INCONCLUSIVE", "INVALID_INPUT"]
+    },
+    "gate_status": {
+      "description": "Outcome of one gate. pass/fail are authoritative; skipped means the gate ran but couldn't reach a verdict; n/a means the gate didn't apply (e.g. sweep_complete when the finding had no sweep group).",
+      "enum": ["pass", "fail", "skipped", "n/a"]
+    },
+    "claim_status": {
+      "description": "Outcome of evaluating one claim from the comments file per skill-fix-verify/comment_rules.md.",
+      "enum": [
+        "accepted",
+        "rejected_unverifiable",
+        "rejected_false"
+      ]
+    },
+    "evidence_kind": {
+      "description": "Category of evidence backing a gate result.",
+      "enum": [
+        "sink_inspection",
+        "data_flow_trace",
+        "sweep_grep",
+        "rule_check"
+      ]
+    },
+    "disposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["finding_id", "verdict", "rationale", "issue_comment", "gates", "evidence"],
+      "properties": {
+        "finding_id": { "$ref": "#/$defs/vuln_id" },
+        "verdict": { "$ref": "#/$defs/verdict" },
+        "rationale": {
+          "description": "Human-readable explanation tying the verdict to specific code observations. Should reference file:line locations rather than generalities. Internal: used by phase 4 and by tooling that wants the short form.",
+          "type": "string"
+        },
+        "issue_comment": {
+          "description": "GitHub-issue-ready markdown for this finding. Posted verbatim as a comment on the corresponding issue by the downstream integration. Includes the verdict, per-gate outcomes with file:line citations, any regressions, and a one-line trailer naming the verified checkout. Templates per verdict are specified in skill-fix-verify/phases/phase2_verify.md.",
+          "type": "string",
+          "minLength": 1
+        },
+        "gates": {
+          "description": "Per-gate outcome. v1 has four gates; the exploit_test_replay gate from the design's wider plan is deferred (docs §13).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sink_mitigated",
+            "reachability",
+            "class_eliminated",
+            "sweep_complete"
+          ],
+          "properties": {
+            "sink_mitigated":   { "$ref": "#/$defs/gate_status" },
+            "reachability":     { "$ref": "#/$defs/gate_status" },
+            "class_eliminated": { "$ref": "#/$defs/gate_status" },
+            "sweep_complete":   { "$ref": "#/$defs/gate_status" }
+          }
+        },
+        "evidence": {
+          "description": "Concrete observations the verifier used. Empty array is allowed for INVALID_INPUT verdicts where no inspection occurred.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "location", "detail"],
+            "properties": {
+              "kind": { "$ref": "#/$defs/evidence_kind" },
+              "location": {
+                "description": "file:line in the FIXED checkout, or 'comments:<line>' when citing the comments file.",
+                "type": "string"
+              },
+              "detail": {
+                "description": "One-sentence observation. Cite a code construct, sanitizer call, missing escape, etc.",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "regressions": {
+          "description": "file:line entries that match the original root-cause pattern in the fixed checkout but are not addressed. Populated when sweep_complete=fail.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "comments_evaluation": {
+      "description": "Outcome of running the optional comments file through comment_rules.md. Always present (with provided=false and claims=[]) even when no comments file was supplied.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provided", "claims"],
+      "properties": {
+        "provided": {
+          "description": "True iff the caller passed a `comments:` argument.",
+          "type": "boolean"
+        },
+        "claims": {
+          "description": "One entry per claim extracted from the comments file. Empty when provided=false.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["excerpt", "status", "rationale"],
+            "properties": {
+              "excerpt": {
+                "description": "Verbatim text segment of the claim.",
+                "type": "string"
+              },
+              "status": { "$ref": "#/$defs/claim_status" },
+              "rationale": {
+                "description": "Why the verifier reached this status. References the rule (R1-R5) and, where applicable, the file it read.",
+                "type": "string"
+              },
+              "cited_location": {
+                "description": "file:line cited by the claim, if any. Absent when the claim had no citation (i.e. when status is rejected_unverifiable for lack of a citation).",
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

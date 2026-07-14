@@ -1,0 +1,117 @@
+{
+  "skill_name": "vulnfix",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/vulnfix https://github.com/example/app ./results/app_VULNHUNT_RESULTS_sonnet46_2026-05-01/",
+      "expected_output": "Parses findings, presents a remediation plan with priorities, asks for confirmation",
+      "assertions": [
+        {
+          "text": "Validates both inputs (repo URL and results path)",
+          "passed": null,
+          "evidence": ""
+        },
+        {
+          "text": "Runs parse_results.py and presents findings table",
+          "passed": null,
+          "evidence": ""
+        },
+        {
+          "text": "Shows prioritized plan before proceeding",
+          "passed": null,
+          "evidence": ""
+        },
+        {
+          "text": "Asks for user confirmation before implementation",
+          "passed": null,
+          "evidence": ""
+        }
+      ],
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Fix VULN-001 SQL injection in the user lookup function",
+      "expected_output": "Creates exploit demo, failing security test, applies fix, test passes",
+      "assertions": [
+        {
+          "text": "Writes exploit demo script showing SQL injection in action",
+          "passed": null,
+          "evidence": ""
+        },
+        {
+          "text": "Writes security test that FAILS before fix",
+          "passed": null,
+          "evidence": ""
+        },
+        {
+          "text": "Applies fix from VulnHunter proposed fix section",
+          "passed": null,
+          "evidence": ""
+        },
+        {
+          "text": "Security test PASSES after fix",
+          "passed": null,
+          "evidence": ""
+        },
+        {
+          "text": "Exploit demo is blocked after fix",
+          "passed": null,
+          "evidence": ""
+        }
+      ],
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "/vulnfix https://github.com/org/private-repo ./results/",
+      "expected_output": "Detects no write access and falls back to creating a GitHub issue",
+      "assertions": [
+        {
+          "text": "Runs check_repo_access.sh and detects no push permission",
+          "passed": null,
+          "evidence": ""
+        },
+        {
+          "text": "Falls back to issue creation with full fix details",
+          "passed": null,
+          "evidence": ""
+        },
+        {
+          "text": "Issue body includes exploit demo, security test, and diff",
+          "passed": null,
+          "evidence": ""
+        }
+      ],
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "/vulnfix — fix fails, security test still fails after applying proposed fix",
+      "expected_output": "Retries with alternative approach, then marks as needs-manual-review",
+      "assertions": [
+        {
+          "text": "Detects that security test still FAILS after first fix attempt",
+          "passed": null,
+          "evidence": ""
+        },
+        {
+          "text": "Reverts the failed fix",
+          "passed": null,
+          "evidence": ""
+        },
+        {
+          "text": "Tries alternative fix approach (up to max_retries)",
+          "passed": null,
+          "evidence": ""
+        },
+        {
+          "text": "After retries exhausted, marks finding as NEEDS_MANUAL_REVIEW",
+          "passed": null,
+          "evidence": ""
+        }
+      ],
+      "files": []
+    }
+  ]
+}

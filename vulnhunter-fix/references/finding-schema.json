@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vulnhunter-fix/references/finding-schema.json",
+  "title": "VulnHunter finding",
+  "description": "Schema for a single parsed VulnHunter finding as emitted by scripts/parse_results.py. Consumed by every downstream phase (Plan, Implement, Verify, Sweep, Deliver).",
+  "type": "object",
+  "required": ["id", "title", "cwe", "severity", "status"],
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^VULN-\\d+$"
+    },
+    "title": {"type": "string", "minLength": 1},
+    "cwe": {
+      "type": "string",
+      "pattern": "^CWE-\\d+$"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["Critical", "High", "Medium", "Low", "Informational"]
+    },
+    "exploit_test": {"type": ["string", "null"]},
+    "status": {
+      "type": "string",
+      "description": "Parser status. Downstream phases may override to VERIFIED / NEEDS_MANUAL_REVIEW / etc; see result-schema.json workerStatus.",
+      "enum": [
+        "Confirmed",
+        "Unconfirmed",
+        "Pending",
+        "Rejected",
+        "AlreadyFixed"
+      ]
+    },
+    "location": {
+      "type": ["string", "null"],
+      "description": "file:line or file path from the report."
+    },
+    "root_cause": {"type": ["string", "null"]},
+    "entry_point": {"type": ["string", "null"]},
+    "data_flow": {"type": ["string", "null"]},
+    "files": {
+      "description": "SCH-1: Producers may emit either an array of paths or an object keyed by role (poc/exploit_test). Both shapes preserved for backward compatibility with parse_results.py:find_related_files and parse_issues.md file harvesting.",
+      "oneOf": [
+        {"type": "array", "items": {"type": "string"}},
+        {
+          "type": "object",
+          "properties": {
+            "poc": {"type": ["string", "null"]},
+            "exploit_test": {"type": ["string", "null"]}
+          },
+          "additionalProperties": {"type": "string"}
+        }
+      ]
+    },
+    "proposed_fix": {
+      "type": ["object", "null"],
+      "properties": {
+        "strategy": {"type": "string"},
+        "files_to_change": {"type": "string"},
+        "why": {"type": "string"}
+      },
+      "additionalProperties": true
+    }
+  }
+}

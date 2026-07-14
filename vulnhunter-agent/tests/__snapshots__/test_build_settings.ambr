@@ -1,0 +1,56 @@
+# serializer version: 1
+# name: test_snapshot_rendered_settings
+  '''
+  {
+    "env": {
+      "ANTHROPIC_AUTH_TOKEN": "stub-token",
+      "ANTHROPIC_BEDROCK_BASE_URL": "https://bedrock.example.com",
+      "AWS_REGION": "us-east-1",
+      "CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS": "1200000",
+      "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "85",
+      "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
+      "CLAUDE_CODE_SKIP_BEDROCK_AUTH": "1",
+      "CLAUDE_CODE_USE_BEDROCK": "1",
+      "ENABLE_PROMPT_CACHING_1H_BEDROCK": "1",
+      "HTTPS_PROXY": "",
+      "HTTP_PROXY": "",
+      "NODE_TLS_REJECT_UNAUTHORIZED": "",
+      "NO_PROXY": "localhost,127.0.0.1,10.0.0.0/8",
+      "http_proxy": "",
+      "https_proxy": "",
+      "no_proxy": "localhost,127.0.0.1,10.0.0.0/8"
+    },
+    "sandbox": {
+      "allowUnsandboxedCommands": false,
+      "enabled": true,
+      "failIfUnavailable": true,
+      "filesystem": {
+        "allowRead": [
+          "."
+        ],
+        "allowWrite": [
+          "."
+        ],
+        "denyRead": [
+          "/app",
+          "/etc",
+          "/proc",
+          "/root",
+          "/home",
+          "/var",
+          "/sys",
+          "/run"
+        ],
+        "denyWrite": [
+          "/"
+        ]
+      },
+      "network": {
+        "allowedDomains": [
+          "bedrock.example.com"
+        ]
+      }
+    }
+  }
+  '''
+# ---

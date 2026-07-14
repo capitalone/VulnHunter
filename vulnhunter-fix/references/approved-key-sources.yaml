@@ -1,0 +1,66 @@
+# Approved key-source patterns
+# Referenced by: REQ-CWE-009 (key_source_approved checker).
+# Consumed by: scripts/crypto-trust-chain-checkers.py (task-38).
+#
+# The checker AST-scans the fix diff for key-derivation call sites. A
+# match against one of the approved patterns sets key_source_approved=true.
+# Any key sourced from env vars (without an approved-source annotation),
+# literal strings, or filesystem paths sets false → MITIGATION tier.
+
+# Chamber of Secrets client (C1 standard)
+chamber:
+  - "chamber.read("
+  - "chamber_client.get("
+  - "ChamberClient("
+  - "@chamber_secret"        # decorator form
+  - "from chamber import"
+
+# AWS KMS SDK — direct integration
+aws_kms:
+  - "kms.decrypt("
+  - "kms.generate_data_key("
+  - "boto3.client('kms')"
+  - 'boto3.client("kms")'
+  - "KMSClient("
+  - "aws_kms_client."
+
+# HashiCorp Vault (approved for legacy applications)
+vault:
+  - "hvac.Client("
+  - "vault.read("
+  - "vault_client.secrets."
+
+# Google Cloud Secret Manager
+gcp_secret_manager:
+  - "secretmanager.SecretManagerServiceClient"
+  - "google.cloud.secretmanager"
+
+# Azure Key Vault
+azure_kv:
+  - "SecretClient("
+  - "azure.keyvault.secrets"
+
+# Kubernetes secret injection (only when combined with a rotation controller)
+kubernetes:
+  - "os.environ['KUBE_SECRET_"     # canonical prefix per C1 K8s conventions
+  - 'os.environ["KUBE_SECRET_'
+
+# Explicit "approved" annotation for edge cases
+annotation:
+  # A comment on the line above the assignment saying:
+  #   # KEY_SOURCE_APPROVED: <rationale>
+  # counts as an approved source. The checker looks for the comment
+  # within the 2 lines preceding the identified key literal or read.
+  - "KEY_SOURCE_APPROVED:"
+
+# Denied patterns — any match sets key_source_approved=false (even if an
+# approved pattern also matches, the deny wins per REQ-CWE-009 conservative
+# ordering).
+denied:
+  - 'key = "'                # literal string key
+  - "key = '"
+  - "key: bytes = b'"
+  - "SECRET_KEY = os.getenv"   # bare env var, no approved annotation
+  - 'SECRET_KEY = os.environ["' # bare env var
+  - "with open("               # filesystem read
+  - "Path(...).read_bytes()"

@@ -1,0 +1,44 @@
+{
+  "backend": "grep",
+  "confidence": "low",
+  "content_hash": "",
+  "edges": [],
+  "generated_at": "",
+  "graphify_version": null,
+  "nodes": {
+    "sample_auth.py:authenticate": {
+      "file": "sample_auth.py",
+      "kind": "function",
+      "language": "python",
+      "line": 15,
+      "name": "authenticate",
+      "qualified_name": "sample_auth.py:authenticate"
+    },
+    "sample_auth.py:check_password": {
+      "file": "sample_auth.py",
+      "kind": "function",
+      "language": "python",
+      "line": 22,
+      "name": "check_password",
+      "qualified_name": "sample_auth.py:check_password"
+    },
+    "sample_auth.py:get_user_by_id": {
+      "file": "sample_auth.py",
+      "kind": "function",
+      "language": "python",
+      "line": 11,
+      "name": "get_user_by_id",
+      "qualified_name": "sample_auth.py:get_user_by_id"
+    },
+    "sample_auth.py:login_handler": {
+      "file": "sample_auth.py",
+      "kind": "function",
+      "language": "python",
+      "line": 26,
+      "name": "login_handler",
+      "qualified_name": "sample_auth.py:login_handler"
+    }
+  },
+  "root_dir": "tests/graph_fixtures/python",
+  "schema_version": "1"
+}

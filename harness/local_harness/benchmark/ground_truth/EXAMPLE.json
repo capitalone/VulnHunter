@@ -1,0 +1,20 @@
+[
+    {
+        "finding_id": "VULN-001",
+        "type": "NoSQLInjection",
+        "source_code": "https://github.com/OWASP/NodeGoat/tree/9a70b47f6f6b6c8e9a8f0c2d3e4f5a6b7c8d9e0f",
+        "description": "SYNTHETIC EXAMPLE — illustrates the ground-truth schema only. In OWASP NodeGoat's allocations flow, a user-controlled request parameter is passed unsanitized into a MongoDB query object, allowing operator injection (e.g. `$gt`, `$where`) that bypasses the intended per-user filter and returns other users' records. Replace the commit hash and details with a real finding from your own corpus before running the benchmark."
+    },
+    {
+        "finding_id": "VULN-002",
+        "type": "SQLInjection",
+        "source_code": "https://github.com/juice-shop/juice-shop/tree/1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+        "description": "SYNTHETIC EXAMPLE — illustrates the ground-truth schema only. In OWASP Juice Shop's login handler, the email field is concatenated directly into a SQL query, permitting an authentication bypass via a classic `' OR 1=1--` payload. Replace the commit hash and details with a real finding from your own corpus before running the benchmark."
+    },
+    {
+        "finding_id": "VULN-003",
+        "type": "PathTraversal",
+        "source_code": "https://github.com/WebGoat/WebGoat/tree/0f1e2d3c4b5a69788796a5b4c3d2e1f009876543",
+        "description": "SYNTHETIC EXAMPLE — illustrates the ground-truth schema only. In OWASP WebGoat's file-serving lesson endpoint, a user-supplied filename is joined to a base directory without canonicalization, allowing `../` sequences to read files outside the intended directory. Replace the commit hash and details with a real finding from your own corpus before running the benchmark."
+    }
+]

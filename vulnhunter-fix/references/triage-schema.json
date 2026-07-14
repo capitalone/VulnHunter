@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vulnhunter-fix/references/triage-schema.json",
+  "title": "VulnHunter-Fix per-finding triage sidecar",
+  "description": "Schema for .work/<repo>/graph_context/<vuln>.json — the per-finding sidecar written by the executor (REQ-GRA-015, REQ-CWE-008). Workers read this instead of querying the graph directly. Non-crypto findings omit crypto_trust_chain.",
+  "type": "object",
+  "required": [
+    "vuln_id",
+    "confidence",
+    "sink_symbol",
+    "callers_of_sink",
+    "generated_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "vuln_id": {
+      "type": "string",
+      "pattern": "^VULN-\\d+$"
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["high", "low"],
+      "description": "high: graphifyy AST succeeded. low: grep fallback (REQ-GRA-006). Selects validator matching mode (REQ-GRA-020)."
+    },
+    "sink_symbol": {
+      "type": ["string", "null"],
+      "description": "The symbol at the vulnerable sink (e.g., 'auth/login.py:authenticate'). Null when the vulnerability is not symbol-anchored (e.g., pure config finding)."
+    },
+    "callers_of_sink": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[^:]+:.+$",
+        "description": "file:symbol form (e.g., 'src/handlers/user.py:handle_login')."
+      },
+      "description": "Output of graph.callers_of(sink_symbol) at sidecar-write time (REQ-GRA-008)."
+    },
+    "blast_radius": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Files reachable from the vulnerable symbol via imports/depends_on (REQ-GRA-007). Optional; empty when graph is unavailable."
+    },
+    "reachable_from_entry": {
+      "type": ["boolean", "null"],
+      "description": "Result of reachable_from(input_file, input_line, sink_symbol). Null when entry point is unknown."
+    },
+    "graph_backend": {
+      "type": "string",
+      "enum": ["ast", "grep", "none"],
+      "description": "Provenance of the sidecar data. Must be 'grep' whenever confidence=='low' and 'ast' whenever confidence=='high'."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "graphifyy_version": {
+      "type": ["string", "null"],
+      "description": "Resolved graphifyy version at sidecar write time. Null in grep-fallback mode."
+    },
+    "crypto_trust_chain": {
+      "type": "object",
+      "description": "Populated only for findings routed to worker_agent_crypto.md (REQ-CWE-008). Mechanical outputs from the four checkers (REQ-CWE-009); never LLM-authored. All four booleans must be true for the worker to grant FULL tier (REQ-CWE-007).",
+      "required": [
+        "algorithm_approved",
+        "key_source_approved",
+        "key_rotation_present",
+        "transport_encrypted",
+        "checker_version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm_approved": {"type": "boolean"},
+        "key_source_approved": {"type": "boolean"},
+        "key_rotation_present": {"type": "boolean"},
+        "transport_encrypted": {"type": "boolean"},
+        "checker_version": {"type": "string", "minLength": 1},
+        "algorithm_evidence": {"type": ["string", "null"]},
+        "key_source_evidence": {"type": ["string", "null"]},
+        "key_rotation_evidence": {"type": ["string", "null"]},
+        "transport_evidence": {"type": ["string", "null"]}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"confidence": {"const": "high"}},
+        "required": ["confidence"]
+      },
+      "then": {
+        "properties": {
+          "graph_backend": {"const": "ast"}
+        },
+        "required": ["graph_backend"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"confidence": {"const": "low"}},
+        "required": ["confidence"]
+      },
+      "then": {
+        "properties": {
+          "graph_backend": {"const": "grep"}
+        },
+        "required": ["graph_backend"]
+      }
+    }
+  ]
+}

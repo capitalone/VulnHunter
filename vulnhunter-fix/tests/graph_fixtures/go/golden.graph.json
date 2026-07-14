@@ -1,0 +1,44 @@
+{
+  "backend": "grep",
+  "confidence": "low",
+  "content_hash": "",
+  "edges": [],
+  "generated_at": "",
+  "graphify_version": null,
+  "nodes": {
+    "sample_auth.go:Authenticate": {
+      "file": "sample_auth.go",
+      "kind": "function",
+      "language": "go",
+      "line": 20,
+      "name": "Authenticate",
+      "qualified_name": "sample_auth.go:Authenticate"
+    },
+    "sample_auth.go:CheckPassword": {
+      "file": "sample_auth.go",
+      "kind": "function",
+      "language": "go",
+      "line": 28,
+      "name": "CheckPassword",
+      "qualified_name": "sample_auth.go:CheckPassword"
+    },
+    "sample_auth.go:GetUserByID": {
+      "file": "sample_auth.go",
+      "kind": "function",
+      "language": "go",
+      "line": 16,
+      "name": "GetUserByID",
+      "qualified_name": "sample_auth.go:GetUserByID"
+    },
+    "sample_auth.go:LoginHandler": {
+      "file": "sample_auth.go",
+      "kind": "function",
+      "language": "go",
+      "line": 32,
+      "name": "LoginHandler",
+      "qualified_name": "sample_auth.go:LoginHandler"
+    }
+  },
+  "root_dir": "tests/graph_fixtures/go",
+  "schema_version": "1"
+}

@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vulnhunter-fix/references/result-schema.json",
+  "title": "VulnHunter-Fix worker result",
+  "description": "Schema for per-finding worker result files (.work/<repo>/.vulnfix-manifests/group-NNN_result.json) and the aggregate .vulnfix_result.json. Covers Honesty (REQ-HON), graph-citation (REQ-GRA), and sweep (REQ-SWP) fields.",
+  "type": "object",
+  "additionalProperties": true,
+  "$defs": {
+    "completenessTier": {
+      "type": "string",
+      "enum": ["FULL", "MITIGATION", "WORKAROUND"],
+      "description": "Terminal completeness classification per REQ-HON-001. LLM_REVIEW is intentionally excluded — it is an intermediate signal from the deterministic classifier, not a terminal state (REQ-HON-012, REQ-HON-013)."
+    },
+    "workerStatus": {
+      "type": "string",
+      "enum": [
+        "VERIFIED",
+        "VERIFIED_FULL",
+        "VERIFIED_MITIGATION",
+        "VERIFIED_WORKAROUND",
+        "ALREADY_FIXED",
+        "CANNOT_AUTO_FIX",
+        "NEEDS_MANUAL_REVIEW",
+        "REQUIRES_HUMAN_DECISION",
+        "BREAKING_CHANGE",
+        "FAILED"
+      ],
+      "description": "REQ-HON-011: VERIFIED may appear bare or with a tier suffix. All four VERIFIED_* forms carry success semantics; the tier is disclosed via completeness_tier. FAILED is emitted when the TDD cycle does not close after retries — semantically distinct from NEEDS_MANUAL_REVIEW (finding too complex to auto-fix) vs CANNOT_AUTO_FIX (requires human coordination)."
+    },
+    "tierJudgment": {
+      "type": "object",
+      "description": "Populated only when the deterministic classifier returned LLM_REVIEW and the bounded LLM fallback was invoked (REQ-HON-013 through REQ-HON-016).",
+      "required": ["invoked", "phase", "final_tier", "rationale", "failure_reason"],
+      "additionalProperties": false,
+      "properties": {
+        "invoked": {"type": "boolean"},
+        "phase": {"type": ["string", "null"], "enum": ["plan", "verify", null]},
+        "final_tier": {
+          "oneOf": [
+            {"$ref": "#/$defs/completenessTier"},
+            {"type": "null"}
+          ]
+        },
+        "rationale": {"type": ["string", "null"], "minLength": 1},
+        "failure_reason": {"type": ["string", "null"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"invoked": {"const": false}}, "required": ["invoked"]},
+          "then": {
+            "properties": {
+              "phase": {"const": null},
+              "final_tier": {"const": null},
+              "rationale": {"const": null},
+              "failure_reason": {"const": null}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"invoked": {"const": true}, "final_tier": {"type": "string"}}, "required": ["invoked", "final_tier"]},
+          "then": {
+            "properties": {
+              "rationale": {"type": "string", "minLength": 1},
+              "failure_reason": {"const": null}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"invoked": {"const": true}, "final_tier": {"const": null}}, "required": ["invoked", "final_tier"]},
+          "then": {
+            "properties": {
+              "failure_reason": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      ]
+    },
+    "breakingChangeDetails": {
+      "type": ["object", "null"],
+      "properties": {
+        "interface_change": {"type": "string"},
+        "caller_action_required": {"type": "string"},
+        "known_callers": {"type": "array", "items": {"type": "string"}},
+        "final_secure_interface": {"type": "string"},
+        "registration_actions": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "findingResult": {
+      "type": "object",
+      "required": [
+        "vuln_id",
+        "status",
+        "cwe",
+        "file_path",
+        "completeness_tier",
+        "residual_vectors",
+        "tier_judgment",
+        "callers_routed_through_fix",
+        "callers_not_routed"
+      ],
+      "properties": {
+        "vuln_id": {"type": "string", "minLength": 1},
+        "status": {"$ref": "#/$defs/workerStatus"},
+        "severity": {"type": ["string", "null"]},
+        "branch": {"type": ["string", "null"]},
+        "file_path": {"type": "string", "minLength": 1},
+        "cwe": {"type": "string", "pattern": "^CWE-\\d+$"},
+        "root_cause": {"type": ["string", "null"]},
+        "breaking_change": {"type": "boolean"},
+        "breaking_change_details": {"$ref": "#/$defs/breakingChangeDetails"},
+        "completeness_tier": {"$ref": "#/$defs/completenessTier"},
+        "residual_vectors": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Per REQ-HON-005: non-empty when completeness_tier != FULL; empty only when tier == FULL. Cross-field constraint enforced below via allOf."
+        },
+        "tier_judgment": {"$ref": "#/$defs/tierJudgment"},
+        "callers_routed_through_fix": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[^:]+:.+$"},
+          "description": "REQ-GRA-019: list of file:symbol pointers that route through the safe pathway after this fix. Must be a superset of graph.callers_of(sink_symbol) for column 7 of the verification table to read 'yes' (REQ-GRA-013)."
+        },
+        "callers_not_routed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["pointer", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "pointer": {"type": "string", "pattern": "^[^:]+:.+$"},
+              "reason": {"type": "string", "minLength": 1}
+            }
+          },
+          "description": "REQ-GRA-019: list of callers NOT routed through the fix, each with a reason. Non-empty when the sink has callers outside the fixed code path — those become residual vectors."
+        },
+        "files_modified": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Repo-relative paths modified by this fix. Consumed by scripts/check-scope.py (Gate 3, --files-modified) and scripts/sweep-root-causes.py Path A (sibling defects on files already in this list are amended into the PR rather than filed as follow-up issues)."
+        },
+        "discrimination_evidence": {
+          "type": ["object", "null"],
+          "properties": {
+            "method": {"type": "string", "enum": ["stash-and-run", "trace", "static-analysis-diff"]},
+            "pre_fix_result": {"type": "string", "enum": ["pass", "fail"]},
+            "post_fix_result": {"type": "string", "enum": ["pass", "fail"]},
+            "assertion_target": {"type": ["string", "null"]}
+          },
+          "additionalProperties": true,
+          "description": "REQ-GRA-017: recorded at Step E.5 of the TDD cycle. Required non-null when completeness_tier is FULL AND status is VERIFIED/VERIFIED_FULL (a fix was applied and verified) — enforced by the allOf below. ALREADY_FIXED / FIX_NOT_NEEDED FULL results are exempt: there is no fix diff to discriminate."
+        },
+        "sweep_ran": {
+          "type": "boolean",
+          "description": "REQ-SWP-001: true if Sweep phase executed for this finding."
+        },
+        "sweep_summary": {
+          "type": ["object", "null"],
+          "description": "REQ-SWP-003 five-column summary for this ROOT cause.",
+          "properties": {
+            "found": {"type": "integer", "minimum": 0},
+            "captured": {"type": "integer", "minimum": 0},
+            "mitigated": {"type": "integer", "minimum": 0},
+            "remaining": {"type": "integer", "minimum": 0},
+            "pattern": {"type": "string"},
+            "captured_annotation": {"type": "string"}
+          },
+          "additionalProperties": true
+        },
+        "sweep_revised": {
+          "type": "boolean",
+          "description": "REQ-SWP-006: true when Sweep downgraded tier from FULL to MITIGATION."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"completeness_tier": {"const": "FULL"}},
+            "required": ["completeness_tier"]
+          },
+          "then": {
+            "properties": {
+              "residual_vectors": {"maxItems": 0}
+            }
+          },
+          "else": {
+            "properties": {
+              "residual_vectors": {"minItems": 1}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "completeness_tier": {"const": "FULL"},
+              "status": {"enum": ["VERIFIED", "VERIFIED_FULL"]}
+            },
+            "required": ["completeness_tier", "status"]
+          },
+          "then": {
+            "required": ["discrimination_evidence"],
+            "properties": {
+              "discrimination_evidence": {
+                "type": "object",
+                "description": "S1 (12-seg review): a FULL+VERIFIED result must carry non-hollow proof. Require the method + both fix results, and constrain them to the only discriminating combination (pre=fail, post=pass) so the contract matches its consumer compute-completeness-tier.py.",
+                "required": ["method", "pre_fix_result", "post_fix_result"],
+                "properties": {
+                  "pre_fix_result": {"const": "fail"},
+                  "post_fix_result": {"const": "pass"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"sweep_revised": {"const": true}},
+            "required": ["sweep_revised"]
+          },
+          "then": {
+            "description": "S4 (12-seg review): the sweep sets sweep_revised=true when an unmitigated sibling remains (REQ-SWP-006). Such a finding CANNOT be FULL — it must downgrade to MITIGATION/WORKAROUND. This is the mechanical backstop that makes 'a found sibling cannot ship as FULL' true, not just prose.",
+            "properties": {
+              "completeness_tier": {"not": {"const": "FULL"}}
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["branches"],
+      "properties": {
+        "branches": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/findingResult"}
+        }
+      }
+    },
+    {
+      "$ref": "#/$defs/findingResult"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+# Minimal config: only required fields. Defaults supply the rest.
+[anthropic]
+bedrock_base_url = "https://bedrock.example.com"
+model = "claude-opus-4-8"
+
+[oauth]
+token_endpoint = "https://oauth.example.com/token"
+client_id = "minimal-client"
+client_secret = "minimal-secret"

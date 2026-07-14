@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/capitalone/vulnhunter/scan_manifest.schema.json",
+  "title": "VulnHunter scan manifest",
+  "description": "Authoritative agent-to-scan-worker contract written at <results_dir>/scan_manifest.json on every run that produces a results directory (agent exit codes 0, 1, 3, 4, or 5). Schema_version bumps are explicit and breaking; the agent validates before writing and the scan-worker validates on read.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scan_id",
+    "agent_exit_code",
+    "cost_usd",
+    "findings",
+    "posted",
+    "skipped",
+    "failed"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Manifest schema version. Constant for this schema file; consumers fail-closed if it differs.",
+      "const": "1"
+    },
+    "scan_id": {
+      "description": "Per-scan identifier. Equals the results-directory basename: <repo>_VULNHUNT_RESULTS_<model>_<UTC-timestamp>.",
+      "type": "string",
+      "pattern": "^.+_VULNHUNT_RESULTS_.+$"
+    },
+    "agent_exit_code": {
+      "description": "Process exit code the agent will return. 0=success, 1=no findings, 2=publish failed, 3=partial issue post, 4=agent crash. Code 2 is included for completeness even though the manifest is normally absent in that path.",
+      "type": "integer",
+      "enum": [0, 1, 2, 3, 4]
+    },
+    "cost_usd": {
+      "description": "Cumulative USD cost the agent observed for this run, as reported by the Claude Agent SDK ResultMessage (running-max across continuations).",
+      "type": "number",
+      "minimum": 0
+    },
+    "findings": {
+      "description": "Confirmed findings extracted from the scan README. Empty array is valid (exit code 1).",
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "posted": {
+      "description": "GitHub issues the agent created during the issues stage.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/posted_record" }
+    },
+    "skipped": {
+      "description": "Findings the agent deduplicated against pre-existing open issues on the target repo.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/skipped_record" }
+    },
+    "failed": {
+      "description": "Findings the agent attempted to post but the GitHub API errored.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/failed_record" }
+    }
+  },
+  "$defs": {
+    "vuln_id": {
+      "description": "Scan-local finding identifier. Zero-padded 3-digit form (VULN-001).",
+      "type": "string",
+      "pattern": "^VULN-\\d{3}$"
+    },
+    "severity": {
+      "description": "Severity rating; empty string is allowed when the extractor could not determine it.",
+      "type": "string",
+      "enum": ["Critical", "High", "Medium", "Low", ""]
+    },
+    "cwe": {
+      "description": "CWE identifier (CWE-NNN); empty string allowed when not determined.",
+      "type": "string",
+      "oneOf": [
+        { "pattern": "^CWE-\\d+$" },
+        { "const": "" }
+      ]
+    },
+    "vulnfix_key": {
+      "description": "16-char lowercase hex SHA-256 prefix over (location, cwe, root_cause). Stable across scans so re-runs collide on the same vulnerability.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "github_issue_url": {
+      "description": "GitHub issue URL. Permits enterprise hosts (e.g. a GitHub Enterprise instance) — scan-worker parses owner/repo/number via regex. HTTPS-only: GitHub's REST `html_url` is always https on both github.com and GHEC, so a real producer should never emit http://; rejecting it removes a small inconsistency with the schema's fail-closed posture and narrows a hypothetical auth-token-leak risk if any future scan-worker code path follows the URL with credentials attached.",
+      "type": "string",
+      "pattern": "^https://[^/]+/[^/]+/[^/]+/issues/\\d+$"
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "cwe",
+        "cwe_name",
+        "severity",
+        "location",
+        "root_cause",
+        "data_flow",
+        "entry_point",
+        "exploit_description",
+        "exploit_impact",
+        "fix_strategy",
+        "severity_rationale",
+        "vulnfix_key",
+        "poc_path",
+        "exploit_test_path"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/vuln_id" },
+        "title": {
+          "description": "Short human-readable title; no CWE prefix, no severity, no VULN-id.",
+          "type": "string"
+        },
+        "cwe": { "$ref": "#/$defs/cwe" },
+        "cwe_name": {
+          "description": "Human-readable CWE name (e.g. \"SQL Injection\"). Empty string allowed when not determined.",
+          "type": "string"
+        },
+        "severity": { "$ref": "#/$defs/severity" },
+        "location": {
+          "description": "Primary code location, typically \"src/path/file.py:42\". Empty string allowed when not determined.",
+          "type": "string"
+        },
+        "root_cause": {
+          "description": "One-sentence description of the underlying defect.",
+          "type": "string"
+        },
+        "data_flow": {
+          "description": "Source → ... → sink description.",
+          "type": "string"
+        },
+        "entry_point": {
+          "description": "HTTP route, function, or other public surface where the vulnerability is reachable.",
+          "type": "string"
+        },
+        "exploit_description": {
+          "description": "What an attacker can do (1-3 sentences). Describe behavior, not exploit code.",
+          "type": "string"
+        },
+        "exploit_impact": {
+          "description": "Concrete consequence (data disclosure, RCE, account takeover, etc.).",
+          "type": "string"
+        },
+        "fix_strategy": {
+          "description": "One-sentence summary of the proposed fix from the report.",
+          "type": "string"
+        },
+        "severity_rationale": {
+          "description": "Why this severity (impact + reachability).",
+          "type": "string"
+        },
+        "vulnfix_key": { "$ref": "#/$defs/vulnfix_key" },
+        "poc_path": {
+          "description": "Relative path to the PoC file inside the results directory, or null when absent.",
+          "type": ["string", "null"]
+        },
+        "exploit_test_path": {
+          "description": "Relative path to the exploit-test file inside the results directory, or null when absent.",
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "posted_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["finding_id", "title", "url"],
+      "properties": {
+        "finding_id": { "$ref": "#/$defs/vuln_id" },
+        "title": { "type": "string" },
+        "url": { "$ref": "#/$defs/github_issue_url" }
+      }
+    },
+    "skipped_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["finding_id", "matched_issue_numbers", "via"],
+      "properties": {
+        "finding_id": { "$ref": "#/$defs/vuln_id" },
+        "matched_issue_numbers": {
+          "description": "Open GitHub issue numbers that already track this finding (vulnfix-key dedup or semantic-title match).",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1 },
+          "minItems": 1
+        },
+        "via": {
+          "description": "Dedup mechanism that matched: \"key\" (vulnfix_key marker found in an existing issue body), \"semantic\" (title similarity), or \"\" when unspecified.",
+          "type": "string",
+          "enum": ["key", "semantic", ""]
+        }
+      }
+    },
+    "failed_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["finding_id", "title", "error"],
+      "properties": {
+        "finding_id": { "$ref": "#/$defs/vuln_id" },
+        "title": { "type": "string" },
+        "error": {
+          "description": "Diagnostic message from the GitHub API error or local exception.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

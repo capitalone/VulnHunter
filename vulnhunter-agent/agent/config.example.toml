@@ -1,0 +1,195 @@
+# VulnHunter agent configuration
+#
+# Copy to config.toml and fill in the values for your environment. Plain
+# values are fine for local use; resolve from a secret manager before
+# passing if you prefer.
+#
+# Every value below can also be supplied via environment variables, which
+# take precedence. The naming pattern is VULNHUNT_<SECTION>_<KEY> in upper
+# case. Examples:
+#     VULNHUNT_ANTHROPIC_API_KEY   (or the standard ANTHROPIC_API_KEY)
+#     VULNHUNT_ANTHROPIC_MODEL
+#     VULNHUNT_GITHUB_SCAN_TOKEN
+#     VULNHUNT_GITHUB_REPORTS_TOKEN
+#     VULNHUNT_SANDBOX_ENABLED       (true/false)
+#     VULNHUNT_SCAN_ALLOWED_TOOLS    (comma-separated)
+
+[anthropic]
+# How the agent authenticates to Claude:
+#   "api_key"       — direct Anthropic API (default). Set api_key below or
+#                     export ANTHROPIC_API_KEY. bedrock_base_url / [oauth]
+#                     are ignored.
+#   "bedrock_oauth" — route through an AWS Bedrock proxy fronted by an OAuth2
+#                     client-credentials endpoint. Requires bedrock_base_url
+#                     and the [oauth] block.
+auth_mode = "api_key"
+api_key = ""
+# Default model. Override per-invocation with --model.
+model = "claude-opus-4-8"
+
+# --- bedrock_oauth mode only (leave blank for api_key mode) ---
+# Base URL of the proxy that fronts Bedrock-hosted Claude.
+bedrock_base_url = ""
+aws_region = "us-east-1"
+
+[oauth]
+# bedrock_oauth mode only: OAuth2 client-credentials endpoint that mints the
+# bearer token forwarded to the Bedrock proxy as ANTHROPIC_AUTH_TOKEN.
+token_endpoint = ""
+client_id = ""
+client_secret = ""
+# Refresh the cached token after this fraction of its declared lifetime.
+expiry_safety_factor = 0.9
+# Assumed lifetime in seconds when the OAuth response omits expires_in.
+default_lifetime_seconds = 3600
+# Outbound HTTP timeout for the token request.
+http_timeout_seconds = 30
+
+[tls]
+# Path to a custom CA bundle used when verifying the OAuth endpoint and
+# anything else httpx talks to. Leave blank to use system trust.
+ssl_cert_path = ""
+
+[sandbox]
+# OS-level filesystem + network sandbox for Claude's bash/edit tools.
+enabled = false
+fail_if_unavailable = true
+allow_unsandboxed_commands = false
+
+[telemetry]
+# Send Claude Code OTLP metrics/logs. Off by default for the CLI.
+enabled = false
+otel_exporter_otlp_endpoint = ""
+# Optional OTEL resource attributes (comma-separated key=value). Leave blank
+# for a neutral default; set to tag telemetry with your own owner/org.
+resource_attributes = ""
+
+[scan]
+# Where cloned repos go.
+clone_base_dir = "./clones"
+clone_timeout_seconds = 300
+# Tools the root session may invoke. Minimal-by-default — the bare set the
+# skill needs to read the codebase, dispatch its phase subagents, and write
+# its report.
+#
+# Add `Grep` if forward-tracing through the source tree starts coming back
+# empty. Add `Edit` only if the skill is producing in-place patches.
+#
+# `Bash` is intentionally absent and CANNOT be enabled via this config
+# (the agent strips it from the effective list). To allow code execution
+# during exploit-test runs, pass `--no-read-only --enable-bash` on the CLI;
+# the agent re-adds Bash at runtime for that invocation only.
+allowed_tools = ["Agent", "Glob", "Read", "Write"]
+permission_mode = "acceptEdits"
+# Trigger context compaction at this percentage of the model's window.
+# Defaults derive from the model: 90 for 1M-context variants, 85 for
+# standard 200K-context. Uncomment to override.
+# autocompact_pct_override = 70
+# Cap how long a subagent (Task tool) can stall without forward progress
+# before the CLI returns "Request timed out". Set 0 to use the CLI default.
+async_agent_stall_timeout_ms = 1200000
+# Comma-separated NO_PROXY written into the scan subprocess env. Default
+# covers loopback + private ranges; add your own internal zones if needed.
+no_proxy = "localhost,127.0.0.1,169.254.169.254,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+[github]
+# Two distinct credentials, scoped by what they touch:
+#   scan_token    — clone the target repo + post issues on it. Required when
+#                   scanning a private repo or when [issues] enabled = true.
+#   reports_token — push scan results + read the prior report from [publish]
+#                   destination_repo. Required when [publish] enabled = true.
+#
+# Each token is injected into URLs only when the parsed host matches `host`
+# (case-insensitive), so a token never leaks across hosts.
+#
+# In standalone use these can be classic PATs or fine-grained tokens with the
+# same scope coverage.
+#
+# `broker_token_dir`: when set, the literal scan_token / reports_token fields
+# are ignored and the agent reads tokens on demand from
+# `{broker_token_dir}/{role}.json`. An external parent process owns the
+# minting + refresh; the agent is a pure file consumer. Leave empty for
+# standalone use.
+scan_token       = ""
+reports_token    = ""
+broker_token_dir = ""
+host             = "github.com"
+
+[publish]
+# After /vulnhunt completes, clone destination_repo, copy the
+# *_VULNHUNT_RESULTS_* directory in, and push a new commit on `branch`.
+# Authentication uses [github].reports_token, which must have write access to
+# destination_repo and whose host must match [github].host. destination_repo
+# must exist before the agent runs — auto-creation is not supported.
+enabled = false
+destination_repo = "https://github.com/your-org/your-results-repo"
+branch = "main"
+commit_author_name = "VulnHunter Agent"
+commit_author_email = "vulnhunter-agent@users.noreply.github.com"
+
+[issues]
+# Post one GitHub issue per confirmed VulnHunter finding to the target repo.
+# Issue body links back to the published report; dedup is done against open
+# issues carrying `dedup_label`.
+enabled = false
+# Repo issues are filed against. Empty string → falls back to the scanned
+# repo URL (the positional argument).
+target_repo = ""
+# Labels applied to every posted issue. The first overlap with dedup_label is
+# also used for the dedup pool.
+labels = ["security", "vulnhunter"]
+# Open issues with this label are the dedup pool.
+dedup_label = "vulnhunter"
+# Models used for findings extraction and semantic dedup. Haiku is tried
+# first; Sonnet is the fallback on transport / parse failure.
+haiku_model = "claude-haiku-4-5"
+sonnet_model = "claude-sonnet-5"
+# Set to false to skip the LLM semantic-compare pass and rely only on the
+# <!-- vulnfix-key: ... --> marker for dedup.
+semantic_dedup = true
+# HTTP timeout for both GitHub API and LLM calls.
+request_timeout_seconds = 60
+# Hard cap on the number of open issues we'll page through for dedup.
+max_open_issues = 1000
+# We'll never let a single batched dedup request exceed this fraction of the
+# model's context window.
+token_budget_fraction = 0.7
+# Used in the chunking math; the haiku and sonnet models here are 200K-context.
+model_context_tokens = 200000
+# When a scan completes with zero findings, post an informational issue in
+# the scanned repo and immediately close it, so "scanned and clean" is
+# distinguishable from "not yet scanned".
+notify_clean_scan = true
+# Label applied to the clean-scan receipt.
+clean_scan_label = "VulnHunter: clean-scan"
+
+[logging]
+# Optional verbose logging slices, off by default. Passing `-v`/`-vv` on the
+# CLI forces both on regardless of the values here.
+per_turn_usage = false
+retries = false
+
+[verify]
+# Inputs for the `--mode=verify` orchestrator. Verify reuses `anthropic`,
+# `oauth`, `github`, `publish`, and `tls` from above; this section holds
+# verify-specific knobs only.
+scratch_base_dir = "./verify_runs"
+clone_timeout_seconds = 300
+
+# `repo_aliases` maps a free-form `repo_hint` string to a clonable git URL.
+# The agent never infers URLs: resolution is full-URL-or-alias only. When a
+# hint cannot be resolved, the agent annotates the comments file and the
+# final issue comment includes a Limitations line naming the ignored hint.
+[verify.repo_aliases]
+# "platform-validators" = "https://github.com/your-org/platform-validators.git"
+# "shared-libs" = "git@github.com:your-org/shared-libs.git"
+
+# Optional operator-defined metadata tags stamped onto emitted findings
+# records. `github_property_map` maps a GitHub custom-property name (from
+# `GET /repos/{owner}/{repo}/properties/values`) to the field name emitted on
+# the findings stream. Empty by default — nothing is fetched or emitted unless
+# you declare a mapping here. Per-run overrides: `--repo-property NAME=VALUE`.
+[repo_properties.github_property_map]
+# "appId" = "app_id_tag"
+# "ownerTeam" = "owner_team"
+

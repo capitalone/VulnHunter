@@ -1,0 +1,43 @@
+# Full config exercising every section.
+[anthropic]
+bedrock_base_url = "https://bedrock.example.com"
+aws_region = "us-west-2"
+model = "claude-opus-4-8"
+
+[oauth]
+token_endpoint = "https://oauth.example.com/token"
+client_id = "full-client"
+client_secret = "full-secret"
+expiry_safety_factor = 0.8
+default_lifetime_seconds = 1800
+http_timeout_seconds = 15
+
+[tls]
+ssl_cert_path = "/etc/ssl/custom-bundle.pem"
+
+[sandbox]
+enabled = true
+fail_if_unavailable = true
+allow_unsandboxed_commands = false
+
+[telemetry]
+enabled = true
+otel_exporter_otlp_endpoint = "https://otel.example.com:9990"
+
+[scan]
+clone_base_dir = "/tmp/clones"
+clone_timeout_seconds = 600
+allowed_tools = ["Read", "Grep"]
+permission_mode = "acceptEdits"
+autocompact_pct_override = 75
+
+[github]
+token = "placeholder-token"
+host = "github.com"
+
+[publish]
+enabled = true
+destination_repo = "https://github.com/example/results"
+branch = "main"
+commit_author_name = "Example Bot"
+commit_author_email = "bot@example.com"
