@@ -13,8 +13,6 @@ Developed and battle-tested internally at Capital One, VulnHunter is released to
 > [!WARNING]
 > **Cyber-safeguard disclaimer**
 > VulnHunter performs dual-use cybersecurity work (vulnerability discovery and exploitation). If you run it against an Anthropic account that is **not** enrolled in Anthropic's [Cyber Verification Program](https://support.claude.com/en/articles/14604842-real-time-cyber-safeguards-on-claude), real-time cyber safeguards may block requests and your usage may be flagged for cyber abuse. If you intend to use VulnHunter on Anthropic's first-party platforms (Claude API / Claude Code), we strongly recommend enrolling first via the [verification portal](https://portal.anthropic.com/programs/cvp).
->
-> Only use VulnHunter on code you are authorized to test and in accordance with Anthropic's [Usage Policy](https://www.anthropic.com/legal/aup).
 
 ---
 
