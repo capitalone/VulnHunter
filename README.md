@@ -2,11 +2,13 @@
 
 > **From pattern-matching to provability.**
 
-VulnHunter is an open-source, **agentic AI security tool** that applies proactive, attacker-perspective analysis directly to source code. 
+VulnHunter is an open-source, **agentic AI security tool** that applies proactive, attacker-first analysis directly to source code. 
 
-Unlike traditional, passive SAST scanners that flag suspicious patterns and leave you to drown in the noise, VulnHunter reasons like an adversary. It **proves** which defects are actually exploitable, provides an executable proof-of-concept, and proposes targeted, evidence-backed fixes.
+Unlike traditional, passive SAST scanners that flag suspicious patterns and often cause false positives, VulnHunter reasons like an adversary. It **identifies** which defects are actually exploitable, maps prospective attack paths, and proposes targeted, evidence-backed fixes.
 
-Developed and battle-tested internally at Capital One, VulnHunter is released to the community to help secure our deeply interconnected modern software supply chain. Find and fix exploitable defects before an adversary's models find them for you.
+Modern software supply chains are deeply interconnected. A single vulnerability in a widely-used open-source component can ripple across thousands of enterprises simultaneously.
+
+Developed internally at Capital One, VulnHunter is released to the community because no single organization can solve this challenge alone.
 
 ---
 
@@ -25,9 +27,9 @@ Developed and battle-tested internally at Capital One, VulnHunter is released to
 
 ## Why VulnHunter is Different
 
-* **Attacker-First Forward Analysis:** Conventional tools work "sink-first"—they spot a dangerous pattern and try to guess a path backward to a hypothetical attacker, flooding teams with false alarms. VulnHunter flips this: it starts at attacker-reachable entry points (APIs, network messages, file uploads) and reasons *forward* to see what an adversary can actually achieve.
-* **The Self-Falsification Engine:** After finding a potential vulnerability, VulnHunter runs an adversarial workflow designed specifically to *disprove* it. It hunts for flawed assumptions, logic gaps, or security controls that would block the attack. If a finding can be debunked, it is discarded. What reaches you is a verified exploit path, not a guess.
-* **Evidence-Backed Remediation:** When a defect survives the falsification engine, VulnHunter maps the exact exploit path, explains the structural flaw, details the capability an attacker gains, and generates targeted code changes for review.
+* **Attacker-First Forward Analysis:** Conventional tools often leverage "sink-first" analysis, looking at potentially dangerous code patterns to search backward for a hypothetical attacker, flooding teams with false positives. VulnHunter flips this model to simulate a bad actor's exact journey. It begins at potential attacker-accessible entry points (APIs, network messages, file uploads) and reasons *forward* to evaluate whether an attacker can truly break through.
+* **Falsification Engine:** After finding a potential vulnerability, VulnHunter runs a structured reasoning workflow specifically designed to *disprove* its own argument. It searches for flawed assumptions, logic gaps, or security controls that would block the attack. It is designed to immediately discard findings that rely on unsupported assumptions. What reaches you is a high-priority, actionable defect.
+* **Evidence-Backed Remediation:** When a defect survives the falsification engine, VulnHunter maps the exact exploit path, explains the structural flaw, details the specific capabilities or access an attacker would gain, and generates focused, targeted code changes for review.
 
 ---
 
