@@ -10,7 +10,7 @@ Modern software supply chains are deeply interconnected. A single vulnerability 
 
 Developed internally at Capital One, VulnHunter is released to the community because no single organization can solve this challenge alone.
 
----
+----
 
 > [!WARNING]
 > **Cyber-safeguard disclaimer**
