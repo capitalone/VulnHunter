@@ -97,6 +97,31 @@ def test_collect_results_does_not_follow_symlinks(tmp_path):
     assert (dst / "README.md").read_text() == "legit report"
 
 
+def test_collect_results_does_not_follow_symlinked_results_root(tmp_path):
+    # CANON-18 (source-root vector): the *_VULNHUNT_RESULTS_* dir itself is a
+    # symlink pointing at a sensitive host directory. os.path.isdir() follows
+    # it, so it must be rejected before copytree — otherwise copytree follows
+    # the symlinked source and copies the target dir's files into the upload.
+    secret_dir = tmp_path / "victim_home_ssh"
+    secret_dir.mkdir()
+    (secret_dir / "id_rsa").write_text("PRIVATE-KEY-HOST-CONTENT-xyz789")
+
+    base = tmp_path / "repos"
+    base.mkdir()
+    repo = base / "evilrepo"
+    repo.mkdir()
+    # results-dir root is a symlink to the sensitive directory
+    os.symlink(str(secret_dir), str(repo / "evilrepo_VULNHUNT_RESULTS_2"))
+
+    upload = tmp_path / "up"
+    utils.collect_results(clone_base=str(base), upload_dir=str(upload))
+
+    dst = upload / "evilrepo_VULNHUNT_RESULTS_2"
+    leaked = dst / "id_rsa"
+    assert not (leaked.exists() or os.path.lexists(str(leaked))), \
+        "symlinked results-dir root followed: host secret copied into upload"
+
+
 def test_scan_status_no_clone_base(tmp_path):
     out = utils.scan_status(clone_base=str(tmp_path / "nope"))
     assert out == {"complete": [], "errored": [], "running": [], "not_started": []}

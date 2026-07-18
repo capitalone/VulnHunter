@@ -63,14 +63,25 @@ def collect_results(clone_base=None, upload_dir=None):
 
     for entry in sorted(os.listdir(clone_base)):
         entry_path = os.path.join(clone_base, entry)
-        if not os.path.isdir(entry_path):
+        # Skip symlinked repo entries: os.path.isdir follows symlinks, so a
+        # symlinked entry could redirect enumeration outside clone_base
+        # (CANON-18 defense-in-depth).
+        if os.path.islink(entry_path) or not os.path.isdir(entry_path):
             continue
         if "_VULNHUNT_RESULTS_" in entry:
             continue
 
+        # A results-dir whose *root* is a symlink must be skipped entirely:
+        # os.path.isdir() follows it, and shutil.copytree() would then follow
+        # the symlinked source and copy the target dir's contents (e.g.
+        # ~/.ssh) into the published upload. The ignore= callable below only
+        # drops symlinks *nested inside* a real tree, not a symlinked root
+        # (CANON-18: arbitrary host-file read).
         results_dirs = [
             d for d in os.listdir(entry_path)
-            if os.path.isdir(os.path.join(entry_path, d)) and "_VULNHUNT_RESULTS_" in d
+            if "_VULNHUNT_RESULTS_" in d
+            and not os.path.islink(os.path.join(entry_path, d))
+            and os.path.isdir(os.path.join(entry_path, d))
         ]
 
         if not results_dirs:
