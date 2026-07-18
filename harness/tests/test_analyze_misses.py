@@ -149,6 +149,24 @@ def test_invoke_diagnostic_success(monkeypatch):
     assert out["root_cause"] == "rc"
 
 
+def test_invoke_diagnostic_no_bash_find(monkeypatch):
+    """Fix C: Bash(find:*) permits `find -exec <cmd>` = arbitrary command
+    execution over the untrusted repo_dir; it must not be in the allow-list.
+    """
+    captured = {}
+
+    def fake_run(cmd, *a, **k):
+        captured["cmd"] = cmd
+        return _proc(0, stdout='{"root_cause":"rc"}')
+
+    monkeypatch.setattr(am.subprocess, "run", fake_run)
+    finding = {"finding_id": "F1", "type": "SQLi", "description": "d", "repo_name": "r"}
+    am.invoke_diagnostic(finding, "phase1", "ev", "/rd", "/repo")
+    assert "Bash(find:*)" not in captured["cmd"]
+    # The other read-only Bash commands are retained.
+    assert "Bash(grep:*)" in captured["cmd"]
+
+
 def test_invoke_diagnostic_timeout(monkeypatch):
     def boom(*a, **k):
         raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
