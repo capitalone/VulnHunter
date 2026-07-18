@@ -94,6 +94,15 @@ _EXIT_INFRA_FAILURE = 1
 _EXIT_BAD_ARGS = 2
 _EXIT_AUTH_FAILURE = 3
 
+# Upper bound on additional repos cloned per verify run (CANON-37).
+# ``requested_sources`` is derived by an LLM from attacker-authored
+# issue/comment text and carries no length cap, so an attacker can pack
+# many distinct resolvable cross-repo references to force unbounded
+# clones (disk/resource exhaustion). Cap the number of repos cloned;
+# references past the cap are skipped. Well above any legitimate small-N
+# case, so normal runs are unaffected.
+MAX_ADDITIONAL_REPOS = 10
+
 
 # ---- result types ----------------------------------------------------------
 
@@ -994,7 +1003,17 @@ def _process_clone_request(
     """
     additional_repos_dir.mkdir(parents=True, exist_ok=True)
     sources = payload.get("requested_sources", []) or []
-    for entry in sources:
+    for index, entry in enumerate(sources):
+        if len(state.additional_repos) >= MAX_ADDITIONAL_REPOS:
+            remaining = len(sources) - index
+            logger.warning(
+                "Additional-repo clone cap reached (%d); skipping %d "
+                "remaining cross-repo reference(s). This bounds "
+                "resource use against attacker-supplied references.",
+                MAX_ADDITIONAL_REPOS,
+                remaining,
+            )
+            break
         hint = (entry or {}).get("repo_hint", "")
         if not hint or hint in state.ignored_hints:
             continue

@@ -758,6 +758,61 @@ async def test_run_verify_preflight_unresolvable_hint_becomes_ignored(
     assert "agent annotations" in captured_comments[0]
 
 
+def test_process_clone_request_caps_additional_repos(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """CANON-37 (resource exhaustion): ``requested_sources`` is derived by
+    an LLM from attacker-authored issue/comment text and has no length cap.
+    Every resolvable reference triggers one ``clone_additional_repo`` call.
+    An attacker can pack many distinct resolvable references to force
+    unbounded clones -> disk/resource exhaustion.
+
+    ``_process_clone_request`` MUST stop cloning once
+    ``MAX_ADDITIONAL_REPOS`` repos have been cloned, regardless of how
+    many resolvable sources were requested.
+    """
+    cap = verify_module.MAX_ADDITIONAL_REPOS
+    # More resolvable sources than the cap.
+    n_sources = cap * 5 + 3
+    sources = [
+        {"repo_hint": f"https://github.com/org/repo-{i}"} for i in range(n_sources)
+    ]
+
+    clone_calls: list[str] = []
+
+    def fake_resolve(hint, aliases, allowed_hosts=()):
+        return hint  # every hint resolves
+
+    def fake_clone(url, clone_root, **kwargs):
+        clone_calls.append(url)
+        p = Path(clone_root)
+        p.mkdir(parents=True, exist_ok=True)
+        return p  # unique per-hint path -> passes dedup, appended to state
+
+    monkeypatch.setattr(verify_module, "resolve_repo_hint", fake_resolve)
+    monkeypatch.setattr(verify_module, "clone_additional_repo", fake_clone)
+
+    state = verify_module._RunState()
+
+    verify_module._process_clone_request(
+        {"requested_sources": sources},
+        state=state,
+        github_token="x",
+        github_host="github.com",
+        timeout_seconds=1,
+        additional_repos_dir=tmp_path / "additional_repos",
+        aliases={},
+        allowed_hosts=("github.com",),
+    )
+
+    assert len(clone_calls) <= cap, (
+        f"unbounded clone: {len(clone_calls)} clones for {n_sources} sources "
+        f"(cap={cap})"
+    )
+    assert len(state.additional_repos) <= cap
+
+
 @pytest.mark.asyncio
 async def test_run_verify_all_open_issues_exits_1_with_list(
     verify_config,
