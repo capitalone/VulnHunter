@@ -144,7 +144,7 @@ def phase_clone(targets, state):
         save_state(state)
 
 
-def phase_scan(targets, state, force_rescan=False, max_workers=MAX_SCAN_WORKERS):
+def phase_scan(targets, state, force_rescan=False, max_workers=MAX_SCAN_WORKERS, execute=False):
     """Phase 2: Scan all cloned repos in parallel."""
     to_scan = []
     for key, target in targets.items():
@@ -194,7 +194,7 @@ def phase_scan(targets, state, force_rescan=False, max_workers=MAX_SCAN_WORKERS)
     print(f"PHASE 2: SCAN ({len(to_scan)} targets, {max_workers} workers)")
     print(f"{'='*60}")
 
-    results = scan_targets(to_scan, max_workers=max_workers)
+    results = scan_targets(to_scan, max_workers=max_workers, readonly=not execute)
 
     for target_key, r in results:
         if r.returncode == 0 and r.results_dir:
@@ -364,6 +364,8 @@ def main():
                         help=f"Parallel scan workers (default: {MAX_SCAN_WORKERS})")
     parser.add_argument("--skip-stable", action="store_true",
                         help="Skip findings detected in every one of the last 3 runs")
+    parser.add_argument("--execute", action="store_true", default=False,
+                        help="Allow the scan agent to execute code (Bash); default is a read-only scan")
     args = parser.parse_args()
 
     # Load benchmarks
@@ -434,7 +436,7 @@ def main():
 
     if not args.judge_only:
         phase_clone(targets, state)
-        phase_scan(targets, state, force_rescan=args.force_rescan, max_workers=args.max_workers)
+        phase_scan(targets, state, force_rescan=args.force_rescan, max_workers=args.max_workers, execute=args.execute)
 
     if args.scan_only:
         print("\n  --scan-only: Skipping judge and tally phases.")
