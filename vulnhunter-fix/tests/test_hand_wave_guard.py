@@ -80,3 +80,47 @@ def test_full_tier_forbids_residuals():
             tier="FULL",
             residual_vectors=["something"],
         )
+
+
+# ---------------------------------------------------------------------------
+# CANON-44 — markdown/HTML injection via residual_vectors (CWE-79/CWE-116)
+#
+# residual_vectors entries are LLM/finding-derived and were interpolated
+# verbatim into the '## Residual Risk' markdown appended to the PR/issue body.
+# The hand-wave / consistency guards reject vague or empty entries but never
+# escape, so an entry can carry raw HTML or a markdown link into the body.
+# ---------------------------------------------------------------------------
+
+
+def test_residual_entry_html_is_neutralized():
+    from vulnhunter_fix.delivery import render_residual_risk_section
+
+    payload = "</details><script>alert(1)</script>"
+    section = render_residual_risk_section("VULN-1", "WORKAROUND", [payload])
+    # Raw tags must not survive; angle brackets must be escaped.
+    assert "<script>" not in section
+    assert "</details>" not in section
+    assert payload not in section
+    # The escaped text is still present as literal content.
+    assert "&lt;script&gt;" in section
+
+
+def test_residual_entry_markdown_link_is_neutralized():
+    from vulnhunter_fix.delivery import render_pr_body_with_residuals
+
+    payload = "[click me](javascript:alert(1))"
+    body = render_pr_body_with_residuals(
+        "VULN-1", "WORKAROUND", [payload], base_body="orig"
+    )
+    # A live markdown link must not be interpolated verbatim; the '[' ']'
+    # metacharacters are neutralized so it renders as literal text.
+    assert payload not in body
+    assert "[click me]" not in body
+
+
+def test_benign_residual_entry_survives_readably():
+    from vulnhunter_fix.delivery import render_residual_risk_section
+
+    entry = "SQLi in legacy_admin.php is not covered by this workaround"
+    section = render_residual_risk_section("VULN-1", "WORKAROUND", [entry])
+    assert f"- {entry}" in section
