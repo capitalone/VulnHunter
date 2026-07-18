@@ -13,6 +13,18 @@ from local_harness.config import (
 from local_harness.scan import extract_cost_from_log
 
 
+def _ignore_symlinks(dirpath, names):
+    """copytree ignore callable that drops any symlink entry.
+
+    Cloned repos are untrusted; a planted symlink (e.g. secret -> /etc/passwd)
+    would otherwise have its target's contents copied into the published upload
+    (CANON-18: arbitrary host-file read). Called per-directory, so nested
+    symlinks are handled too. Dropping the entry entirely means neither the
+    symlink nor a dangling link ships.
+    """
+    return [name for name in names if os.path.islink(os.path.join(dirpath, name))]
+
+
 def parse_repo_list(repo_list_file=None):
     """Read REPO_LIST.txt and return list of URLs.
 
@@ -70,7 +82,7 @@ def collect_results(clone_base=None, upload_dir=None):
             dst = os.path.join(upload_dir, rdir)
             if os.path.isdir(dst):
                 shutil.rmtree(dst)
-            shutil.copytree(src, dst)
+            shutil.copytree(src, dst, ignore=_ignore_symlinks)
             copied.append(rdir)
 
     print(f"{'=' * 60}")

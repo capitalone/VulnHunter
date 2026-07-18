@@ -1,6 +1,7 @@
 """Tests for local_harness.batch.utils."""
 
 import json
+import os
 
 import local_harness.batch.utils as utils
 
@@ -64,6 +65,36 @@ def test_collect_results_overwrites_existing_dst(tmp_path):
     utils.collect_results(clone_base=str(base), upload_dir=str(upload))
     assert not (upload / "repoA_VULNHUNT_RESULTS_1" / "OLD.md").exists()
     assert (upload / "repoA_VULNHUNT_RESULTS_1" / "README.md").exists()
+
+
+def test_collect_results_does_not_follow_symlinks(tmp_path):
+    # CANON-18: a scanned (untrusted) repo can plant a symlink inside its
+    # *_VULNHUNT_RESULTS_* dir pointing at a sensitive host file. collect_results
+    # must not follow it and copy the target's contents into the published upload.
+    secret = tmp_path / "SECRET_host_file"
+    secret.write_text("TOP-SECRET-HOST-CONTENT-abc123")
+
+    base = tmp_path / "repos"
+    base.mkdir()
+    repo = base / "evilrepo"
+    repo.mkdir()
+    rd = repo / "evilrepo_VULNHUNT_RESULTS_1"
+    rd.mkdir()
+    (rd / "README.md").write_text("legit report")
+    os.symlink(str(secret), str(rd / "stolen_passwd"))
+
+    upload = tmp_path / "up"
+    utils.collect_results(clone_base=str(base), upload_dir=str(upload))
+
+    dst = upload / "evilrepo_VULNHUNT_RESULTS_1"
+    leaked = dst / "stolen_passwd"
+    # Secret target contents must never appear in the published tree.
+    assert not (leaked.is_file() and not leaked.is_symlink()), \
+        "symlink target followed: host secret copied into upload"
+    if leaked.exists() or os.path.lexists(str(leaked)):
+        assert "TOP-SECRET-HOST-CONTENT" not in leaked.read_text()
+    # The legitimate regular file still copies fine.
+    assert (dst / "README.md").read_text() == "legit report"
 
 
 def test_scan_status_no_clone_base(tmp_path):
