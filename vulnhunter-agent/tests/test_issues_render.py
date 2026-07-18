@@ -309,3 +309,58 @@ class TestCleanScanComment:
         assert "abc1234" in comment
         assert "757 seconds" in comment
         assert "2026-07-06T18:42:51Z" in comment
+
+
+class TestMarkerCommentBreakout:
+    """CANON-21: attacker-influenced marker fields must not break out of the
+    HTML-comment footer markers (CWE-79 / CWE-116).
+
+    ``f.id`` and ``report.results_dir_name`` are stamped verbatim into
+    ``<!-- vulnhunt-finding-id: {VULN_ID} -->`` /
+    ``<!-- vulnhunt-results-dir: {RESULTS_DIR_NAME} -->``. Both originate from
+    LLM/scan-README-derived data, so a value containing ``-->`` would close the
+    comment early and inject arbitrary markdown/HTML into the rendered issue.
+    """
+
+    def test_finding_id_cannot_break_out_of_comment(self) -> None:
+        body = render_body(
+            _finding(id="VULN-001 --><script>injected</script><!--"),
+            report=_report(),
+            report_url="https://example/README.md",
+        )
+        # The injected breakout + payload must not appear un-neutralized.
+        assert "--><script>injected</script>" not in body
+        assert "<script>injected</script>" not in body
+        # The finding-id marker line stays a single well-formed comment: exactly
+        # one closing '-->' on that line and no injected content after it.
+        marker_line = next(
+            l for l in body.splitlines() if "vulnhunt-finding-id" in l
+        )
+        assert marker_line.count("-->") == 1
+        assert marker_line.rstrip().endswith("-->")
+
+    def test_results_dir_cannot_break_out_of_comment(self) -> None:
+        body = render_body(
+            _finding(),
+            report=_report(
+                results_dir_name="r_VULNHUNT_RESULTS_x --><b>x</b><!--"
+            ),
+            report_url="https://example/README.md",
+        )
+        assert "--><b>x</b>" not in body
+        assert "<b>x</b>" not in body
+        marker_line = next(
+            l for l in body.splitlines() if "vulnhunt-results-dir" in l
+        )
+        assert marker_line.count("-->") == 1
+        assert marker_line.rstrip().endswith("-->")
+
+    def test_benign_finding_id_still_survives(self) -> None:
+        # Neutralization must not corrupt a legitimate VULN-NNN id so the
+        # downstream ``vulnhunt-finding-id: (VULN-\d{3})`` parser still matches.
+        body = render_body(
+            _finding(id="VULN-042"),
+            report=_report(),
+            report_url="https://example/README.md",
+        )
+        assert "<!-- vulnhunt-finding-id: VULN-042 -->" in body
