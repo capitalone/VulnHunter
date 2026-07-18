@@ -43,10 +43,18 @@ _RESIDUAL_MD_ESCAPE_CHARS = ("\\", "`", "[", "]")
 
 def _escape_residual_entry(entry) -> str:
     """Neutralize markdown/HTML metacharacters in a residual-vector entry so it
-    renders as literal text inside the '## Residual Risk' bullet list."""
+    renders as literal text inside the '## Residual Risk' bullet list.
+
+    Each entry is rendered as a single ``- {entry}`` bullet. A raw CR/LF would
+    let the entry break out of its bullet and inject top-level markdown blocks
+    (headings, horizontal rules, fake prose), so runs of CR/LF are collapsed to
+    a single space before the angle-bracket/backtick/bracket escaping (CANON-44,
+    CWE-116 line-break injection)."""
     s = html.escape(str(entry), quote=False)
     for ch in _RESIDUAL_MD_ESCAPE_CHARS:
         s = s.replace(ch, "\\" + ch)
+    # Collapse newlines so an entry cannot span multiple markdown lines.
+    s = re.sub(r"[\r\n]+", " ", s)
     return s
 
 
