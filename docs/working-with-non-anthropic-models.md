@@ -8,12 +8,13 @@ third-party models (GLM, Kimi, DeepSeek, Gemma, Nemotron, OpenAI's open models, 
 
 This doc explains **how** to do that and **which models actually work**.
 
-> TL;DR — in our evaluations as of 2026-07-18, the only models we'd consider for a
-> real scan are **Claude Opus 4.8** (native) and **GLM-5.2** (via OpenRouter). GLM had
-> better severe-vulnerability coverage; Opus produced more polished and consistent
-> reports. Neither result supports treating one run as complete. Among the completed
-> evaluations, the other models were noisy, incomplete, or non-starters. OpenAI
-> frontier models have not yet completed the same evaluation.
+> TL;DR — in our evaluations as of 2026-07-19, the models we'd consider for a real scan
+> are **Claude Opus 4.8** (native), **GLM-5.2**, and — on a single strong run — **Kimi
+> K3** (both via OpenRouter). GLM-5.2 and Kimi K3 led on severe-vulnerability coverage
+> and cost-effectiveness; Opus produced the most polished and consistent reports. No
+> single run should be treated as complete. Other completed evaluations — including
+> **Qwen 3.7 Max** — were noisy, incomplete, or non-starters. OpenAI frontier models
+> have not yet completed the same evaluation.
 
 ---
 
@@ -118,6 +119,7 @@ run `claude` normally; `/vulnhunt` already gates itself to Opus-class models by 
 |---|---|---|
 | **Claude Opus 4.8** | native `claude` | **Recommended for report quality and consistency.** Reliably completed the pipeline and produced the most polished reports. Its main weakness was recon coverage: both evaluated runs missed some of the most severe findings. It was also the most expensive option. |
 | **GLM-5.2** | `z-ai/glm-5.2` (OpenRouter) | **Recommended for severity-weighted coverage and value.** It produced the strongest severe-vulnerability coverage at substantially lower cost than Opus, with generally strong precision. Run-to-run variance is the main caveat. |
+| **Kimi K3** | `moonshotai/kimi-k3` (OpenRouter) | **Recommended, on a single run.** In one evaluation it led the field on true-positive count and cost-effectiveness with strong precision, and it **uniquely discovered two exploitable High-severity vulnerabilities no other model found** (a token path-prefix bypass and an ambient-credential clone). Caveats: only one run so far; it was slow (~5.5 h); and its severe-vuln credit came from findings it discovered rather than the previously-known set. A clear generational jump over Kimi k2.7-code (below) — do not confuse the two. |
 
 **Caveat on GLM (and any single run):** finding overlap between runs was low. The most
 severe issue appeared consistently, but the secondary findings changed substantially.
@@ -134,7 +136,8 @@ see the full report's objectivity caveat.
 
 | Model | OpenRouter id | Why not |
 |---|---|---|
-| Kimi k2.7-code | `moonshotai/kimi-k2.7-code` | Completed, but was noisy and slow. It repeatedly treated trusted or operator-controlled inputs as attacker-reachable and was outperformed by GLM. |
+| Kimi k2.7-code | `moonshotai/kimi-k2.7-code` | Completed, but was noisy and slow. It repeatedly treated trusted or operator-controlled inputs as attacker-reachable and was outperformed by GLM. **Superseded by Kimi K3 (recommended, above) — a distinct, much stronger model.** |
+| Qwen 3.7 Max | `qwen/qwen3.7-max` | **Failed in practice.** Recon was strong, but the hunt stage mass-dismissed nearly every real finding: 1 true positive (plus 1 false positive) against 37 known vulnerabilities, missing all five High-severity ones — despite spawning 40 subagents and 1,100+ tool calls. It also self-mislabeled its own model in the report and declared the codebase "well-hardened." High effort, near-zero yield. |
 | Nemotron-3-ultra | `nvidia/nemotron-3-ultra-550b-a55b` | Produced low-precision, incomplete output with invalid citations and internal inconsistencies. Not usable. |
 | Gemma-4-31b | `google/gemma-4-31b-it` | **Failed.** Misunderstood the threat model, missed the real attack surface, and emitted a false all-clear. A null result presented as a clean bill of health is worse than no scan. |
 | DeepSeek-v4-pro | `deepseek/deepseek-v4-pro` | **Failed.** Could not follow the pipeline instructions and produced no usable output. |
