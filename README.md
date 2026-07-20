@@ -84,8 +84,21 @@ cd vulnhunter
 # ./uninstall.sh    
 ```
 
+On Windows, use the `.cmd` equivalents from a `cmd.exe` or PowerShell prompt:
+
+```bat
+git clone https://github.com/capitalone/vulnhunter.git
+cd vulnhunter
+
+REM Copy skills into %USERPROFILE%\.claude\skills\
+install.cmd
+
+REM (Optional) To clean up or remove installed skills
+REM uninstall.cmd
+```
+
 > [!NOTE]
-> `install.sh` copies files directly (rather than symlinking) because symlinks can break `find`/`glob` functionality inside subagents. Re-run `./install.sh` after pulling updates to refresh your local environment.
+> `install.sh`/`install.cmd` copy files directly (rather than symlinking) because symlinks can break `find`/`glob` functionality inside subagents. Re-run the install script after pulling updates to refresh your local environment.
 
 ---
 

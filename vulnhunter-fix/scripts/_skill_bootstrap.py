@@ -21,7 +21,8 @@ Side effects:
 - ``os.execv`` replaces the process — anything imported before this
   module is discarded. Callers must import this FIRST, before any of
   the deps that trigger the mismatch.
-- Only fires when a ``python3`` binary exists inside ``.venv/bin/``.
+- Only fires when a Python binary exists inside the bundled venv
+  (``.venv/bin/python3`` on POSIX, ``.venv/Scripts/python.exe`` on Windows).
 """
 from __future__ import annotations
 
@@ -32,7 +33,11 @@ import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SKILL_ROOT = os.path.dirname(_HERE)
-_VENV_PY = os.path.join(_SKILL_ROOT, ".venv", "bin", "python3")
+_VENV_PY = (
+    os.path.join(_SKILL_ROOT, ".venv", "Scripts", "python.exe")
+    if os.name == "nt"
+    else os.path.join(_SKILL_ROOT, ".venv", "bin", "python3")
+)
 
 
 def _same_interpreter(a: str, b: str) -> bool:
@@ -64,12 +69,16 @@ def _prepend_once(path: str) -> None:
 
 # 2. Under the bundled Python OR in dev flow: put the matching-minor's
 #    site-packages at index 0 (defensive; usually already present).
-_matching = os.path.join(
-    _SKILL_ROOT,
-    ".venv",
-    "lib",
-    f"python{sys.version_info.major}.{sys.version_info.minor}",
-    "site-packages",
+_matching = (
+    os.path.join(_SKILL_ROOT, ".venv", "Lib", "site-packages")
+    if os.name == "nt"
+    else os.path.join(
+        _SKILL_ROOT,
+        ".venv",
+        "lib",
+        f"python{sys.version_info.major}.{sys.version_info.minor}",
+        "site-packages",
+    )
 )
 _prepend_once(_matching)
 

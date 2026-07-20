@@ -56,6 +56,9 @@ work/
 .vulnhunter-fix/
 .installed-from
 
+# pip download cache (created by install.cmd)
+pip/
+
 # Stray dir from a mis-quoted URL (e.g. a test writing "https://..." as a path)
 https:/
 
