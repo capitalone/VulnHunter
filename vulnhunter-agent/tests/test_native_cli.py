@@ -9,6 +9,7 @@ from vulnhunter.cli import (
     _ask_level,
     _ask_model_count,
     _browse_model_list,
+    _browse_provider_model_list,
     _configure_models_interactively,
     _load_env_file,
     _live_scan_summary,
@@ -283,6 +284,50 @@ def test_model_browser_searches_and_selects(monkeypatch) -> None:
     )
 
     assert selected == "google/gemini-b"
+
+
+def test_unified_model_browser_groups_providers_with_continuous_numbers(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "3")
+
+    selected = _browse_provider_model_list(
+        title="Active model providers",
+        discovered={
+            "codex-cli": {
+                "models": ["gpt-a", "gpt-b"],
+                "metadata": {
+                    "gpt-a": {"billing_label": "ChatGPT/Codex plan"},
+                    "gpt-b": {"billing_label": "ChatGPT/Codex plan"},
+                },
+                "account": {},
+                "error": "",
+            },
+            "openrouter": {
+                "models": ["vendor/first", "vendor/second"],
+                "metadata": {
+                    "vendor/first": {
+                        "context_tokens": 131_072,
+                        "input_cost_per_million": 0.5,
+                        "output_cost_per_million": 1.0,
+                    }
+                },
+                "account": {},
+                "error": "",
+            },
+        },
+        provider_order=["codex-cli", "openrouter"],
+        current_identities={("codex-cli", "gpt-a"): "codex-cli"},
+        allow_done=True,
+    )
+
+    output = capsys.readouterr().out
+    assert selected == ("openrouter", "vendor/first")
+    assert "──── Codex CLI / ChatGPT plan ────" in output
+    assert "   1. gpt-a" in output
+    assert "   2. gpt-b" in output
+    assert "──── openrouter ────" in output
+    assert "   3. vendor/first" in output
 
 
 def test_model_browser_explains_filter_and_page_boundaries(

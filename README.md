@@ -80,8 +80,12 @@ vulnhunter scan --help
 ```
 
 During `init`, VulnHunter queries each configured provider's current model list.
-The model browser supports numbered selection, `/text` filtering, and
-next/previous pages, and shows each provider-reported context-window size.
+The model browser combines every active provider into one numbered catalog,
+with visible provider dividers and continuous numbering across each page.
+Codex CLI and local catalogs appear before large remote catalogs such as
+OpenRouter. Numbered selection returns both provider and model; `/text` filters
+across provider names and model IDs, and next/previous navigate the combined
+results. Each row shows its provider-reported context-window size.
 Models whose provider does not publish a limit are labeled `unknown`.
 Context is compacted (`131k`, `1M`) and available pricing is normalized as
 `$.05/M in - $1/M out`; missing price metadata is labeled `pricing unknown`.

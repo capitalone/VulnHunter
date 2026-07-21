@@ -58,7 +58,11 @@ vulnhunter scan --help
 2. How many independent core models?
 
 `vulnhunter init` also queries each provider's live model catalog and opens a
-paginated, searchable model picker. The chosen IDs are retained in
+paginated, searchable model picker. Active providers share one continuously
+numbered catalog with visible dividers, so Codex CLI, local models, and
+OpenRouter choices remain distinguishable while being selectable from the same
+screen. Codex and local catalogs are placed before large remote catalogs, and
+search covers provider names as well as model IDs. The chosen IDs are retained in
 `~/.vulnhunter/config.models.json` without rewriting the TOML or storing
 credentials. Each catalog entry shows its provider-reported context window (or
 `unknown` when unavailable) in compact form such as `131k` or `1M`.

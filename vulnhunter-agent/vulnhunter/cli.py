@@ -1533,60 +1533,91 @@ async def _configure_models_interactively(
         alias: model.reasoning_effort for alias, model in config.models.items()
     }
     changed = False
-    print("\nModel defaults (Enter keeps the current model)")
+    provider_aliases: dict[str, list[str]] = {}
     for alias, model in sorted(
         config.models.items(), key=lambda item: item[1].priority
     ):
         if provider_filter and model.provider != provider_filter:
             continue
-        row = discovered.get(
-            model.provider,
-            {"models": [], "metadata": {}, "account": {}, "error": "not queried"},
+        provider_aliases.setdefault(model.provider, []).append(alias)
+    provider_order = sorted(
+        provider_aliases,
+        key=lambda name: (
+            0 if config.providers[name].kind == "codex_cli" else 1,
+            0 if not config.providers[name].remote else 1,
+            min(config.models[alias].priority for alias in provider_aliases[name]),
+            name,
+        ),
+    )
+    unavailable = [
+        f"{provider}: {discovered[provider]['error']}"
+        for provider in provider_order
+        if discovered.get(provider, {}).get("error")
+    ]
+    for detail in unavailable:
+        print(f"  {_paint('unavailable', _YELLOW)} — {detail}")
+    selectable = {
+        provider: discovered[provider]
+        for provider in provider_order
+        if provider in discovered
+        and not discovered[provider].get("error")
+        and discovered[provider].get("models")
+    }
+    print(
+        "\nModel defaults (active providers share one numbered catalog; "
+        "Enter finishes)"
+    )
+    while selectable:
+        current_identities = {
+            (model.provider, selections.get(alias, model.model)): alias
+            for alias, model in config.models.items()
+            if model.provider in selectable
+        }
+        choice = _browse_provider_model_list(
+            title="Active model providers",
+            discovered=selectable,
+            provider_order=[row for row in provider_order if row in selectable],
+            current_identities=current_identities,
+            allow_done=True,
         )
-        if row["error"]:
-            print(f"  {alias}: cannot query {model.provider}: {row['error']}")
-            continue
-        selected = _browse_model_list(
-            alias=alias,
-            provider=model.provider,
-            current=model.model,
-            models=list(row["models"]),
-            metadata=dict(row.get("metadata", {})),
-            account=dict(row.get("account", {})),
-        )
-        if selected != model.model:
+        if choice is None:
+            break
+        provider_name, selected = choice
+        alias = provider_aliases[provider_name][0]
+        model = config.models[alias]
+        row = selectable[provider_name]
+        details = row.get("metadata", {}).get(selected, {})
+        if selections.get(alias) != selected:
             selections[alias] = selected
             changed = True
-        discovered_context = row.get("metadata", {}).get(selected, {}).get(
-            "context_tokens"
-        )
+        discovered_context = details.get("context_tokens")
         if discovered_context and int(discovered_context) != model.context_tokens:
             selection_contexts[alias] = int(discovered_context)
             changed = True
-        details = row.get("metadata", {}).get(selected, {})
         selected_reasoning = _choose_reasoning_effort(
             selected,
             details,
             current=selection_reasoning.get(alias, "auto"),
         )
-        if selected_reasoning != model.reasoning_effort:
+        if selected_reasoning != selection_reasoning.get(alias, "auto"):
             selection_reasoning[alias] = selected_reasoning
             changed = True
-        for key, destination, current_value in (
-            (
-                "input_cost_per_million",
-                selection_input_costs,
-                model.input_cost_per_million,
-            ),
-            (
-                "output_cost_per_million",
-                selection_output_costs,
-                model.output_cost_per_million,
-            ),
+        for key, destination in (
+            ("input_cost_per_million", selection_input_costs),
+            ("output_cost_per_million", selection_output_costs),
         ):
-            if details.get(key) is not None and float(details[key]) != current_value:
+            if details.get(key) is None:
+                if alias in destination and selected != model.model:
+                    destination.pop(alias)
+                    changed = True
+            elif destination.get(alias) != float(details[key]):
                 destination[alias] = float(details[key])
                 changed = True
+        print(
+            f"Selected {_paint(provider_name, _MAGENTA_BOLD)} / "
+            f"{_paint(selected, _CYAN_BOLD)} for alias {alias}."
+        )
+        break
     if changed:
         path = save_model_defaults(
             config,
@@ -1612,39 +1643,38 @@ async def _configure_models_interactively(
         next_number += 1
     ordinal = {2: "second", 3: "third"}.get(next_number, f"#{next_number}")
     while input(f"Add a {ordinal} core model? [y/N]: ").strip().lower() in {"y", "yes"}:
-        available_providers = [
-            name for name, row in discovered.items() if not row["error"] and row["models"]
-        ]
-        if not available_providers:
+        available = {
+            name: row
+            for name, row in discovered.items()
+            if not row["error"]
+            and any(
+                (name, model_id) not in selected_identities
+                for model_id in row["models"]
+            )
+        }
+        if not available:
             print("No provider model catalogs are available.")
             break
-        if len(available_providers) == 1:
-            provider_name = available_providers[0]
-        else:
-            print("Choose provider for the next core model:")
-            for index, name in enumerate(available_providers, 1):
-                print(f"  {index}. {name}")
-            raw = input("Provider number: ").strip()
-            try:
-                provider_name = available_providers[int(raw) - 1]
-            except (ValueError, IndexError) as exc:
-                raise ValueError("provider selection is outside the displayed list") from exc
-        candidates = [
-            model_id
-            for model_id in discovered[provider_name]["models"]
-            if (provider_name, model_id) not in selected_identities
-        ]
-        if not candidates:
-            print(f"No unselected models remain for {provider_name}.")
-            break
-        selected_model = _browse_model_list(
-            alias=f"Core model {next_number}",
-            provider=provider_name,
-            current=None,
-            models=candidates,
-            metadata=dict(discovered[provider_name].get("metadata", {})),
-            account=dict(discovered[provider_name].get("account", {})),
+        unselected = {
+            name: {
+                **row,
+                "models": [
+                    model_id
+                    for model_id in row["models"]
+                    if (name, model_id) not in selected_identities
+                ],
+            }
+            for name, row in available.items()
+        }
+        choice = _browse_provider_model_list(
+            title=f"Choose core model {next_number}",
+            discovered=unselected,
+            provider_order=[row for row in provider_order if row in unselected],
+            current_identities={},
+            allow_done=False,
         )
+        assert choice is not None
+        provider_name, selected_model = choice
         template = next(
             model for model in config.models.values() if model.provider == provider_name
         )
@@ -1703,6 +1733,142 @@ async def _configure_models_interactively(
         print(f"Saved core-team roster: {path}")
         next_number += 1
         ordinal = {2: "second", 3: "third"}.get(next_number, f"#{next_number}")
+
+
+def _browse_provider_model_list(
+    *,
+    title: str,
+    discovered: dict[str, dict[str, Any]],
+    provider_order: list[str],
+    current_identities: dict[tuple[str, str], str],
+    allow_done: bool,
+) -> tuple[str, str] | None:
+    """Browse all active provider catalogs with continuous numbering."""
+    catalog: list[tuple[str, str]] = []
+    for provider in provider_order:
+        row = discovered.get(provider, {})
+        metadata = row.get("metadata", {})
+        models = list(dict.fromkeys(str(value) for value in row.get("models", [])))
+        free = [model_id for model_id in models if metadata.get(model_id, {}).get("free")]
+        pinned = free[:3]
+        ordered = [*pinned, *[model_id for model_id in models if model_id not in pinned]]
+        catalog.extend((provider, model_id) for model_id in ordered)
+    filtered = catalog
+    filter_term = ""
+    page = 0
+    page_size = 20
+    free_notices: set[str] = set()
+    while True:
+        pages = max(1, (len(filtered) + page_size - 1) // page_size)
+        page = min(page, pages - 1)
+        start = page * page_size
+        visible = list(enumerate(filtered[start : start + page_size], start + 1))
+        print(
+            f"\n{title} (page {page + 1}/{pages}, {len(filtered)} models"
+            f"{f', filter: {filter_term!r}' if filter_term else ''})"
+        )
+        previous_provider = ""
+        for index, (provider, model_id) in visible:
+            row = discovered[provider]
+            details = row.get("metadata", {}).get(model_id, {})
+            if provider != previous_provider:
+                provider_kind = (
+                    "Codex CLI / ChatGPT plan"
+                    if provider == "codex-cli"
+                    else provider
+                )
+                print(
+                    "  "
+                    + _paint(
+                        f"──── {provider_kind} ────",
+                        _MAGENTA_BOLD,
+                    )
+                )
+                previous_provider = provider
+                if (
+                    not filter_term
+                    and provider not in free_notices
+                    and any(
+                        row.get("metadata", {}).get(value, {}).get("free")
+                        for value in row.get("models", [])
+                    )
+                ):
+                    free_count = sum(
+                        1
+                        for value in row.get("models", [])
+                        if row.get("metadata", {}).get(value, {}).get("free")
+                    )
+                    _print_free_model_notice(
+                        free_count, dict(row.get("account", {}))
+                    )
+                    free_notices.add(provider)
+            context = details.get("context_tokens")
+            context_label = _format_context(int(context) if context else None)
+            pricing_label = _format_pricing(
+                details, local=bool(details.get("local"))
+            )
+            cache_label = _format_cache(details)
+            current_alias = current_identities.get((provider, model_id))
+            marker = f" * current: {current_alias}" if current_alias else ""
+            free_badge = (
+                " " + _paint("FREE", _GREEN_BOLD) if details.get("free") else ""
+            )
+            print(
+                f"  {index:>4}. {_paint(model_id, _CYAN_BOLD)} — "
+                f"{_paint(context_label, _YELLOW)} — "
+                f"{_paint(pricing_label, _GREEN)} — "
+                f"{_paint(cache_label, _MAGENTA_BOLD)}"
+                f"{free_badge}{marker}"
+            )
+        finish = "finish" if allow_done else "select a model"
+        raw = input(
+            "Choose number, /text to filter all providers, / to clear, "
+            f"n(ext), p(revious), or Enter to {finish}: "
+        ).strip()
+        if not raw:
+            if allow_done:
+                return None
+            print("Select a displayed model number.")
+            continue
+        if raw.lower() in {"n", "next"}:
+            if page >= pages - 1:
+                print("Already on the last page.")
+            else:
+                page += 1
+            continue
+        if raw.lower() in {"p", "prev", "previous"}:
+            if page == 0:
+                print("Already on the first page.")
+            else:
+                page -= 1
+            continue
+        if raw.startswith("/"):
+            term = raw[1:].strip().casefold()
+            filtered = (
+                [
+                    item
+                    for item in catalog
+                    if term in item[0].casefold() or term in item[1].casefold()
+                ]
+                if term
+                else catalog
+            )
+            page = 0
+            if not filtered:
+                print("No models matched that search.")
+                filtered = catalog
+                filter_term = ""
+            else:
+                filter_term = term
+            continue
+        try:
+            choice = int(raw) - 1
+        except ValueError:
+            print("Enter a displayed number or one of the navigation commands.")
+            continue
+        if 0 <= choice < len(filtered):
+            return filtered[choice]
+        print("That model number is outside the filtered list.")
 
 
 def _browse_model_list(
