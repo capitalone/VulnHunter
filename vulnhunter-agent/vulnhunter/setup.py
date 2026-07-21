@@ -484,7 +484,10 @@ async def doctor(
         provider = create_provider(config.providers[model.provider])
         ok, detail = await provider.health(model)
         probe: dict[str, object] = {}
-        if ok and probe_models:
+        provider_probed_in_health = bool(
+            getattr(provider, "health_includes_capability_probe", False)
+        )
+        if ok and probe_models and not provider_probed_in_health:
             try:
                 small_model = replace(model, max_output_tokens=128)
                 provider_manages_tools = bool(
@@ -529,7 +532,9 @@ async def doctor(
                     response_schema=(
                         {
                             "type": "object",
-                            "properties": {"ok": {"const": True}},
+                            "properties": {
+                                "ok": {"type": "boolean", "const": True}
+                            },
                             "required": ["ok"],
                             "additionalProperties": False,
                         }
@@ -574,6 +579,13 @@ async def doctor(
             except Exception as exc:  # noqa: BLE001
                 ok = False
                 detail = f"capability probe failed: {exc}"
+        elif ok and probe_models and provider_probed_in_health:
+            probe = {
+                "tool_calls": "provider-managed",
+                "structured_output": True,
+                "usage_reporting": False,
+                "context_tokens": model.context_tokens,
+            }
         rows.append(
             {
                 "alias": alias,

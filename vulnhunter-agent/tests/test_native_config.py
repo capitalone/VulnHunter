@@ -12,6 +12,7 @@ from vulnhunter.config import (
     parse_engine_config,
     save_additional_model,
     save_model_defaults,
+    save_model_roster,
 )
 
 
@@ -255,3 +256,32 @@ def test_additional_core_models_persist_in_saved_roster(tmp_path) -> None:
         "vendor/first",
         "vendor/second",
     ]
+
+
+def test_saved_roster_replaces_old_models_and_caps_active_team(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[providers.router]\n"
+        'kind = "openrouter"\n\n'
+        "[providers.codex-cli]\n"
+        'kind = "codex_cli"\n\n'
+        "[models.router]\n"
+        'provider = "router"\n'
+        'model = "vendor/old"\n\n'
+        "[models.codex-cli]\n"
+        'provider = "codex-cli"\n'
+        'model = "gpt-old"\n',
+        encoding="utf-8",
+    )
+    base = load_engine_config(config_path, apply_model_defaults=False)
+    old_extra = replace(
+        base.models["router"], alias="router-2", model="vendor/extra"
+    )
+    save_additional_model(base, old_extra)
+
+    selected = replace(base.models["codex-cli"], model="gpt-new", priority=1)
+    save_model_roster(base, [selected])
+    reloaded = load_engine_config(config_path)
+
+    assert list(reloaded.models) == ["codex-cli"]
+    assert reloaded.models["codex-cli"].model == "gpt-new"

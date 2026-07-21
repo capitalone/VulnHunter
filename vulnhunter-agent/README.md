@@ -22,8 +22,6 @@ workflow described later in this document.
 python -m pip install \
   "git+https://github.com/JJsilvera1/Multi-VulnHunter.git#subdirectory=vulnhunter-agent"
 vulnhunter init
-vulnhunter doctor
-vulnhunter scan .
 ```
 
 For a local editable checkout on Windows PowerShell:
@@ -52,25 +50,54 @@ vulnhunter --help
 vulnhunter scan --help
 ```
 
-`vulnhunter scan .` asks exactly two questions:
+### Guided first scan
+
+Interactive `vulnhunter init` configures providers and then asks, in order:
+
+1. Repository path or Git URL.
+2. Optional Git branch, tag, or commit.
+3. Quick, Standard, Deep, or Exhaustive depth.
+4. One to three independent core models.
+5. The exact models, selected from the shared live catalog.
+6. Final confirmation: start, change the configuration, or save setup only.
+
+The confirmation screen discloses every provider that receives source. The scan
+does not begin—and a remote Git target is not cloned—until the user confirms.
+Use `vulnhunter init --setup-only` to configure providers without opening this
+wizard. For later scans, `vulnhunter scan PATH` begins with two primary choices:
 
 1. Quick, Standard, Deep, or Exhaustive?
 2. How many independent core models?
 
-`vulnhunter init` also queries each provider's live model catalog and opens a
+Teams are capped at three core models. If the saved roster is larger than the
+count chosen for a scan, a short follow-up lets you choose which saved models
+will run.
+
+Targets can be local directories or Git URLs. An optional ref creates an
+isolated checkout for a branch, tag, or commit, leaving the current local
+checkout unchanged:
+
+```bash
+vulnhunter scan https://github.com/example/project.git \
+  --ref v2.4.1 --level deep --models 3 --yes
+```
+
+After the wizard asks for a team size, it queries each provider's live model
+catalog and opens a
 paginated, searchable model picker. Active providers share one continuously
 numbered catalog with visible dividers, so Codex CLI, local models, and
 OpenRouter choices remain distinguishable while being selectable from the same
 screen. Codex and local catalogs are placed before large remote catalogs, and
 search covers provider names as well as model IDs. The chosen IDs are retained in
 `~/.vulnhunter/config.models.json` without rewriting the TOML or storing
-credentials. Each catalog entry shows its provider-reported context window (or
+credentials. Running `init` again builds a fresh roster and replaces the prior
+saved team; it never appends a fourth or fifth model. Each catalog entry shows
+its provider-reported context window (or
 `unknown` when unavailable) in compact form such as `131k` or `1M`.
 Provider prices are displayed per million tokens, for example
 `$.05/M in - $1/M out`, and retained for scan estimates. After choosing each
-model, answer `y` to
-add the next independent core model or `n` to finish the roster. Reopen it at
-any time with:
+model, the wizard advances to the next slot until the chosen team size is
+complete. Reopen the catalog at any time with:
 
 ```bash
 vulnhunter models
@@ -199,9 +226,26 @@ refresh, workspace policy, and logout. These assignments are ephemeral and
 read-only. Their billing is shown as `ChatGPT/Codex plan`, not a fabricated USD
 API amount, so they cannot participate in `--max-cost-usd` enforcement.
 
+Scan preflight runs a tiny isolated Codex capability request before repository
+work. This catches stale OAuth, unavailable models, and an outdated active CLI
+before multiple hunts start. Codex assignments are serialized because parallel
+`codex exec` processes can race shared OAuth refresh state. If preflight says a
+model requires a newer Codex version, check which executable is active with
+`where codex` on Windows or `which -a codex` on macOS/Linux. For an npm install:
+
+```bash
+npm install -g @openai/codex@latest
+codex --version
+codex login
+vulnhunter doctor
+```
+
+If the version is current but refresh still fails, run `codex logout`, then
+`codex login` again.
+
 Codex CLI has its own provider catalog; searching OpenRouter for `openai` does
-not show Codex-plan models. When Codex CLI is added to an existing config,
-VulnHunter opens its picker directly. Reconfigure it later with:
+not show Codex-plan models. It appears as a separate section in the shared
+picker. Reconfigure it later with:
 
 ```bash
 vulnhunter models --provider codex-cli

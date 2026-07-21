@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -324,6 +325,41 @@ async def test_all_free_team_enables_serial_pacing(monkeypatch, tmp_path: Path) 
     free_event = next(details for event, details in events if event == "free_team_mode")
     assert free_event["models"] == 3
     assert free_event["max_workers"] == 1
+
+
+@pytest.mark.asyncio
+async def test_codex_cli_provider_work_is_serialized() -> None:
+    config = parse_engine_config(
+        {
+            "providers": {"codex": {"kind": "codex_cli", "remote": True}},
+            "models": {
+                "codex": {
+                    "provider": "codex",
+                    "model": "gpt-test",
+                    "remote": True,
+                }
+            },
+        }
+    )
+    engine = ScanEngine(config, providers={"codex": FakeProvider("codex")})
+    active = 0
+    maximum_active = 0
+
+    async def work() -> tuple[dict[str, Any], Usage]:
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return {}, Usage()
+
+    await asyncio.gather(
+        engine._run_with_provider_limit("codex", work),
+        engine._run_with_provider_limit("codex", work),
+        engine._run_with_provider_limit("codex", work),
+    )
+
+    assert maximum_active == 1
 
 
 @pytest.mark.asyncio

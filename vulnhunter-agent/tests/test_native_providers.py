@@ -9,8 +9,9 @@ import pytest
 
 from vulnhunter.config import ProviderConfig
 from vulnhunter.models import ModelSpec
-from vulnhunter.providers import create_provider
-from vulnhunter.providers.codex_cli import CodexCLIProvider
+from vulnhunter.prompts import CANDIDATE_SCHEMA
+from vulnhunter.providers import ProviderError, create_provider
+from vulnhunter.providers.codex_cli import CodexCLIProvider, _openai_strict_schema
 
 
 @pytest.mark.asyncio
@@ -214,6 +215,8 @@ async def test_codex_cli_catalog_and_reasoning_invocation(monkeypatch, tmp_path)
         async def communicate(self, prompt=None):
             seen["command"] = self.command
             seen["prompt"] = prompt
+            schema = Path(self.command[self.command.index("--output-schema") + 1])
+            seen["schema"] = json.loads(schema.read_text(encoding="utf-8"))
             output = Path(self.command[self.command.index("-o") + 1])
             output.write_text('{"ok":true}', encoding="utf-8")
             return (
@@ -249,14 +252,86 @@ async def test_codex_cli_catalog_and_reasoning_invocation(monkeypatch, tmp_path)
         ),
         messages=[{"role": "user", "content": "inspect"}],
         tools=[],
-        response_schema={"type": "object"},
+        response_schema={
+            "type": "object",
+            "properties": {"ok": {"type": "boolean", "const": True}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        },
     )
     command = seen["command"]
     assert 'model_reasoning_effort="high"' in command
     assert "--sandbox" in command and "read-only" in command
+    assert seen["schema"]["properties"]["ok"]["type"] == "boolean"
     assert response.content == '{"ok":true}'
     assert response.usage.input_tokens == 12
     assert response.usage.cached_input_tokens == 8
+
+
+@pytest.mark.asyncio
+async def test_codex_cli_surfaces_jsonl_model_version_error(monkeypatch, tmp_path) -> None:
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self, _prompt=None):
+            return (
+                b'{"type":"turn.failed","error":{"message":"{\\"detail\\":'
+                b'\\"The model requires a newer version of Codex.\\"}"}}\n',
+                b'ERROR Auth(TokenRefreshFailed("Failed to parse server response"))',
+            )
+
+    async def fake_subprocess(*_command, **_kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr("vulnhunter.providers.codex_cli.shutil.which", lambda _name: "codex")
+    monkeypatch.setattr(
+        "vulnhunter.providers.codex_cli.asyncio.create_subprocess_exec",
+        fake_subprocess,
+    )
+    provider = CodexCLIProvider(
+        ProviderConfig(name="codex", kind="codex_cli", base_url="")
+    )
+    provider.set_repository_root(tmp_path)
+
+    with pytest.raises(ProviderError, match="requires a newer version.*Upgrade"):
+        await provider.complete(
+            model=ModelSpec(
+                alias="codex",
+                provider="codex",
+                model="gpt-test",
+                remote=True,
+            ),
+            messages=[{"role": "user", "content": "probe"}],
+            tools=[],
+        )
+
+
+def test_codex_hunt_schema_is_recursively_strict() -> None:
+    schema = _openai_strict_schema(CANDIDATE_SCHEMA)
+
+    def assert_strict(node):
+        if isinstance(node, list):
+            for item in node:
+                assert_strict(item)
+            return
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "object":
+            assert node["additionalProperties"] is False
+            assert set(node["required"]) == set(node["properties"])
+        for value in node.values():
+            assert_strict(value)
+
+    assert_strict(schema)
+    candidate = schema["properties"]["candidates"]["items"]
+    assert "confidence" in candidate["required"]
+    assert candidate["properties"]["source"]["required"] == [
+        "file",
+        "line",
+        "symbol",
+        "description",
+        "claim",
+    ]
 
 
 @pytest.mark.asyncio

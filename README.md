@@ -12,62 +12,99 @@ VulnHunter is an open-source, **agentic AI security tool** that applies proactiv
 > skill names, and Apache 2.0 license; it is not presented as an official
 > Capital One release.
 
-## What Multi-VulnHunter adds
+## What this fork adds
 
-This fork preserves the original Claude-oriented workflows and adds a
-provider-neutral scanning engine that can:
+| Capability | What it provides |
+|---|---|
+| Multi-model teams | Blind generalist hunts, candidate union, and cross-model review |
+| Provider-neutral CLI | Terminal and CI use without requiring Claude Code |
+| Broad provider support | Anthropic, OpenAI, OpenRouter, Gemini, Codex CLI, Ollama, and local OpenAI-compatible servers |
+| Adjustable rigor | Quick, Standard, Deep, and Exhaustive scan levels |
+| Operational controls | Cost tracking, rate-limit handling, checkpoints, resume, and typed manifests |
+| Coding-tool integration | One root `SKILL.md` for Codex, Claude Code, OpenCode, Pi, and similar tools |
 
-- run directly from a terminal or CI job without Claude Code;
-- use Anthropic, OpenAI, OpenRouter, Ollama, Codex CLI authentication, Gemini,
-  or OpenAI-compatible local runtimes;
-- run multiple independent generalist models side-by-side, union their
-  candidates, and have isolated reviewers check one another's work;
-- add optional specialists without replacing broad generalist coverage;
-- select Quick, Standard, Deep, or Exhaustive scan rigor independently from
-  the number of core models;
-- track provider usage, caching, costs, rate limits, incomplete coverage, and
-  resumable checkpoints; and
-- integrate with Codex, Claude Code, OpenCode, Pi, or another coding tool
-  through the root `SKILL.md` and the same universal CLI.
+## See it in action
 
-## Provider-neutral scanner
+The guided wizard asks for the repository, scan depth, team size, and models.
+Its combined catalog shows each active provider, context window, pricing, cache
+support, and free-model availability in one numbered list.
 
-VulnHunter now includes a standalone, multi-model scanner in
-`vulnhunter-agent/`. It does not require Claude Code and can be called from a
-terminal, CI job, OpenCode, Pi, Codex, Claude Code, or any coding tool that can
-run a command and read JSON.
+![VulnHunter guided scan and model selection](docs/images/guided-model-selection.png)
 
-Supported model paths include:
+Once scanning begins, live progress shows the active assignment, elapsed time,
+estimated time remaining, provider usage, completed responses, and tool activity.
 
-- Anthropic, OpenAI, and Gemini;
-- OpenRouter;
-- native Ollama;
-- OpenAI-compatible local servers such as vLLM, llama.cpp, LM Studio, and
-  LocalAI.
+![VulnHunter live multi-model scan progress](docs/images/live-scan-progress.png)
 
-## Fastest setup: skill import or CLI
+## Quick start
 
-There is no single natural-language import phrase guaranteed by every coding
-tool. Tools that support repository/Agent Skill imports can use the root
-[`SKILL.md`](SKILL.md). For example, tell Pi, Claude Code, Codex, OpenCode, or a
-similar agent:
+### Import as a skill
+
+For Codex, Claude Code, OpenCode, Pi, or another tool that supports GitHub
+Agent Skills, use:
 
 > Install `https://github.com/JJsilvera1/Multi-VulnHunter` as an Agent Skill. Use the
 > root `SKILL.md`, then follow the provider setup in the repository README. Do
 > not select a remote provider without showing me the source-exposure notice.
 
-If that tool supports GitHub skill imports, it can clone the repository and
-discover the root skill. If it does not, use the universal CLI path below; the
-coding tool only needs to run the command, wait, and read `run_manifest.json`.
+The root [`SKILL.md`](SKILL.md) delegates scanning to the same CLI and typed
+`run_manifest.json` used by automation.
+
+### Install the CLI
 
 ```bash
 python -m pip install \
   "git+https://github.com/JJsilvera1/Multi-VulnHunter.git#subdirectory=vulnhunter-agent"
 
 vulnhunter init
-vulnhunter doctor
-vulnhunter scan .
 ```
+
+`vulnhunter init` is the guided first-run command. It detects providers, then
+walks through one complete scan setup:
+
+1. Enter an existing local repository path or a Git clone URL.
+2. Optionally enter a branch, tag, or commit. Enter scans the current local
+   checkout or the remote repository's default branch.
+3. Choose Quick, Standard, Deep, or Exhaustive depth.
+4. Choose one, two, or three core models.
+5. Select each model from the combined live provider catalog.
+6. Review source exposure, reasoning settings, and the complete configuration.
+7. Choose **Y** to scan, **C** to change it, or **N** to save without scanning.
+
+The first screen looks like this:
+
+```text
+Repository path or Git URL [.]: C:\src\my-project
+Git branch, tag, or commit [current/default; Enter keeps default]:
+
+Choose scan level:
+  1. Quick        Broad scan, minimal review
+  2. Standard     Independent hunts + cross-review
+  3. Deep         Gap analysis + additional verification
+  4. Exhaustive   Maximum static coverage and evidence
+
+How many core models? [1-3, default 1]: 3
+```
+
+After model selection, VulnHunter shows a final review:
+
+```text
+Scan configuration
+  Repository: C:\src\my-project
+  Git ref: current checkout / remote default
+  Depth: standard
+  Core models: 3
+    1. codex-cli/gpt-5.6-sol (REMOTE — source is sent, reasoning high)
+    2. openrouter/model-b (REMOTE — source is sent)
+    3. ollama/local-coder (local)
+  Execution: static/read-only
+
+Start this scan? [Y]es / [C]hange / [N] save setup only:
+```
+
+Use `vulnhunter init --setup-only` when you only want to configure providers.
+After setup, `vulnhunter scan PATH` starts another scan without rebuilding the
+provider configuration.
 
 To see every CLI command or detailed help for one command:
 
@@ -79,107 +116,80 @@ vulnhunter --help
 vulnhunter scan --help
 ```
 
-During `init`, VulnHunter queries each configured provider's current model list.
-The model browser combines every active provider into one numbered catalog,
-with visible provider dividers and continuous numbering across each page.
-Codex CLI and local catalogs appear before large remote catalogs such as
-OpenRouter. Numbered selection returns both provider and model; `/text` filters
-across provider names and model IDs, and next/previous navigate the combined
-results. Each row shows its provider-reported context-window size.
-Models whose provider does not publish a limit are labeled `unknown`.
-Context is compacted (`131k`, `1M`) and available pricing is normalized as
-`$.05/M in - $1/M out`; missing price metadata is labeled `pricing unknown`.
-For OpenRouter, three zero-cost models are pinned at the top and marked `FREE`.
-The picker explains that free-model limits are normally 50 requests/day or up
-to 1,000/day for eligible funded accounts; OpenRouter does not currently expose
-a reliable free-request-remaining counter. Available key spend/usage is shown
-separately so it is not confused with request quota.
-Provider-reported input-cache support and cache-read pricing are shown beside
-each model. Scan output and manifests track API requests, rate-limit retries,
-cached input tokens, cache writes, and actual or estimated API cost.
-When every core hunter is a free remote model, VulnHunter automatically enters
-free-team pacing: assignments run serially and calls are spaced by at least 3.2
-seconds to stay below OpenRouter's documented 20 requests/minute. A `429`
-honors `Retry-After` and adds bounded exponential backoff with jitter. The CLI
-warns that this mode is intentionally slower.
-Interactive terminals color model identities cyan, context yellow, and pricing
-green. Control this globally with `vulnhunter --color auto|always|never ...`,
-or set the standard `NO_COLOR` environment variable.
-During a scan, blue marks active phases, green marks completed work, yellow
-marks warnings or resumed/incomplete work, red marks failures, and magenta
-marks review/candidate activity. Progress remains line-oriented and includes
-text and symbols so meaning never depends on color alone.
+The model catalog has provider dividers, pricing, context size, cache
+information, and free-model labels. Re-running `init` replaces the saved roster
+instead of accumulating additional models.
 
-For detailed live diagnostics and a log that can be tailed from another
-PowerShell window:
+Useful commands:
 
-```powershell
-vulnhunter scan . --verbose --log-file .\vulnhunter-progress.jsonl
-Get-Content .\vulnhunter-progress.jsonl -Wait
+| Command | Purpose |
+|---|---|
+| `vulnhunter models` | Change saved models across active providers |
+| `vulnhunter doctor` | Check providers, credentials, Git, and local prerequisites |
+| `vulnhunter init --setup-only` | Configure providers without starting a scan |
+| `vulnhunter scan .` | Choose scan depth and a core team of up to three models |
+| `vulnhunter scan URL --ref TAG` | Scan an isolated branch, tag, or commit checkout |
+| `vulnhunter scan . --team-model codex-cli` | Scan with only the saved Codex model |
+| `vulnhunter instructions codex` | Print a coding-tool walkthrough |
+
+See the [scanner guide](vulnhunter-agent/README.md) for scan levels, team
+behavior, pricing, free-model pacing, live telemetry, budgets, resume, local
+runtimes, and automation.
+
+### How multi-model scanning works
+
+Core models begin as unrestricted generalists. They hunt independently and do
+not see one another's conclusions until blind discovery finishes. Candidates
+are unioned—never majority-voted away—and then reviewed in fresh contexts.
+Higher depth settings add coverage analysis, focused follow-ups, more reviewers,
+and stronger evidence requirements.
+
+```mermaid
+flowchart TD
+    A["Repository inventory"] --> B{"Selected depth"}
+    B --> H1["Generalist model A — blind hunt"]
+    B --> H2["Generalist model B — blind hunt"]
+    B --> H3["Generalist model C — blind hunt"]
+    H1 --> U["Union and deduplicate candidates"]
+    H2 --> U
+    H3 --> U
+    U --> R["Fresh-context cross-model review"]
+    R --> Q{"Depth-specific work"}
+    Q -->|"Quick"| F["Falsification and static evidence"]
+    Q -->|"Standard"| S["Ring review and root-cause sweep"]
+    Q -->|"Deep"| D["Coverage gaps, disputes, second review"]
+    Q -->|"Exhaustive"| E["Every peer reviews every candidate; two sweeps"]
+    F --> O["Typed manifest and human-readable report"]
+    S --> O
+    D --> O
+    E --> O
 ```
-
-Provider calls emit a heartbeat every 15 seconds. Each completed response
-updates observed API spend, token totals, elapsed time, and a live adaptive
-estimate. The compact status line groups elapsed time with ETA, spend with its
-estimated total, and cumulative provider responses with tool calls. The initial
-forecast uses repository partitions, expected assignments,
-and estimated agent/tool turns; its confidence is explicitly low until real
-provider usage arrives. Use `--max-cost-usd` when a hard stop matters.
-The cap stops new assignment scheduling; an already-running multi-turn
-assignment can finish slightly above it.
-After the first selection it offers to add a second,
-third, or further core model. The complete roster is saved locally and shown
-by provider/model identity on the scan's model-count screen. Run
-`vulnhunter models` to change or extend it later, or choose `m` from the scan.
 
 ### Provider credentials
 
-VulnHunter never writes API keys into its TOML configuration. Export provider
-variables normally, or copy
-[`providers.env.example`](vulnhunter-agent/providers.env.example) to
-`~/.vulnhunter/providers.env`. That dedicated file is loaded automatically;
-repository `.env` files are deliberately not loaded because they may contain
-unrelated application secrets.
+VulnHunter references credentials from the process environment or
+`~/.vulnhunter/providers.env`; it does not store API keys in its TOML config or
+load a target repository's `.env` file.
 
 ```bash
 mkdir -p ~/.vulnhunter
 vulnhunter env-example --write ~/.vulnhunter/providers.env
-# Edit the file and set only the providers you want to use.
 vulnhunter init
 ```
 
-You can instead supply a particular file with `--env-file /secure/path/providers.env`.
-Recognized credentials are `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`,
+Recognized API variables are `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, and `GEMINI_API_KEY`. Ollama and unauthenticated local servers
-need no key.
+need no key. An authenticated Codex CLI can also be used without exposing its
+OAuth token to VulnHunter; run `codex login`, then `vulnhunter init`.
 
-Gemini's OpenAI-compatible API is supported directly. Google Cloud OAuth/ADC is
-supported for a Vertex OpenAI-compatible endpoint through a refreshable
-`credential_command`; see
-[`config.multi.example.toml`](vulnhunter-agent/config.multi.example.toml).
-OpenAI's public API uses `OPENAI_API_KEY`. As a separate option, an installed
-Codex CLI authenticated with `codex login` can be selected as a provider.
-VulnHunter invokes ephemeral, read-only `codex exec` assignments and lets Codex
-own OAuth storage and refresh; it never reads or copies `~/.codex/auth.json`.
-Codex CLI is a separate provider, so its models do not appear when filtering
-the OpenRouter catalog. When it is added to an existing configuration, setup
-opens the Codex picker directly. Reopen that catalog later with
-`vulnhunter models --provider codex-cli`. To run only the saved Codex model,
-use `vulnhunter scan . --team-model codex-cli`; selecting a larger automatic
-model count can include it alongside OpenRouter when both pass preflight.
+VulnHunter verifies the selected Codex model with a tiny isolated request before
+starting repository hunts and runs Codex assignments one at a time to avoid
+OAuth refresh races. If the active CLI is outdated, update it first (npm users:
+`npm install -g @openai/codex@latest`), verify with `codex --version`, and run
+`codex login` again.
 
-Reasoning-capable models expose an `auto` or explicit thinking-effort selector
-in `vulnhunter models`. OpenRouter choices come from its live model metadata;
-Codex choices come from the current Codex-maintained model catalog. Interactive
-incomplete scans offer to resume failed work from the checkpoint without
-rerunning completed assignments. Automation can use `--retry-incomplete` for
-one bounded retry.
-
-An interactive scan asks only two questions: the scan level and number of core
-models. Core models hunt independently as unrestricted generalists before they
-see one another's work. Optional specialists supplement that coverage; they
-never replace it. See [`vulnhunter-agent/README.md`](vulnhunter-agent/README.md)
-for configuration, tiers, safety controls, and automation examples.
+Remote models receive selected repository content. The exact provider roster
+and locality are shown before dispatch.
 
 Unlike traditional, passive SAST scanners that flag suspicious patterns and often cause false positives, VulnHunter reasons like an adversary. It **identifies** which defects are actually exploitable, maps prospective attack paths, and proposes targeted, evidence-backed fixes.
 

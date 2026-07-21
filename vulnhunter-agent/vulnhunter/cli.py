@@ -24,11 +24,19 @@ from .config import (
     load_engine_config,
     save_additional_model,
     save_model_defaults,
+    save_model_roster,
 )
 from .engine import ScanEngine, estimate_scan
 from .instructions import SUPPORTED_TOOLS, render_instructions
 from .inventory import build_inventory
-from .models import RunStatus, ScanLevel, ScanLimits, ScanRequest, SpecialistSpec
+from .models import (
+    ModelSpec,
+    RunStatus,
+    ScanLevel,
+    ScanLimits,
+    ScanRequest,
+    SpecialistSpec,
+)
 from .providers import create_provider
 from .setup import (
     PROVIDER_ENV_EXAMPLE,
@@ -117,7 +125,9 @@ Run 'vulnhunter help COMMAND' for detailed command help.
         "--json", action="store_true", help="print discovered models as JSON"
     )
 
-    init_parser = subparsers.add_parser("init", help="detect providers and write config")
+    init_parser = subparsers.add_parser(
+        "init", help="configure providers and walk through a first scan"
+    )
     init_parser.add_argument(
         "--config", default=str(DEFAULT_CONFIG_PATH), help="config TOML destination"
     )
@@ -126,7 +136,14 @@ Run 'vulnhunter help COMMAND' for detailed command help.
         "--force", action="store_true", help="regenerate and replace existing config"
     )
     init_parser.add_argument(
-        "--skip-model-picker", action="store_true", help="do not open model selection"
+        "--skip-model-picker",
+        action="store_true",
+        help="setup only; skip the interactive scan wizard (legacy name)",
+    )
+    init_parser.add_argument(
+        "--setup-only",
+        action="store_true",
+        help="configure providers without starting the interactive scan wizard",
     )
     remote_group = init_parser.add_mutually_exclusive_group()
     remote_group.add_argument(
@@ -162,6 +179,9 @@ Run 'vulnhunter help COMMAND' for detailed command help.
     scan_parser = subparsers.add_parser("scan", help="scan a local checkout or git URL")
     scan_parser.add_argument(
         "target", nargs="?", default=".", help="local checkout or Git clone URL"
+    )
+    scan_parser.add_argument(
+        "--ref", help="optional Git branch, tag, or commit to scan in an isolated checkout"
     )
     scan_parser.add_argument("--config", default=None, help="config TOML path")
     scan_parser.add_argument("--env-file", help="provider credential env file")
@@ -291,7 +311,6 @@ def _run_init(args: argparse.Namespace) -> int:
         print(f"Using existing VulnHunter config: {path}")
         print("Run with --force only if you want to regenerate and replace it.")
         config = load_engine_config(path)
-        codex_added = False
         codex_detection = discover_codex_cli()
         if codex_detection and "codex-cli" not in config.providers:
             add_codex = bool(args.allow_remote)
@@ -308,92 +327,68 @@ def _run_init(args: argparse.Namespace) -> int:
                 append_codex_cli_config(path, config, codex_detection)
                 print("Added Codex CLI provider without reading or storing OAuth tokens.")
                 config = load_engine_config(path)
-                codex_added = True
         elif codex_detection and "codex-cli" in config.providers:
             print(
-                "Codex CLI provider is already configured. Its models are separate "
-                "from OpenRouter; use 'vulnhunter models --provider codex-cli' "
-                "to change the saved Codex model."
+                "Codex CLI provider is already configured and will appear in the "
+                "shared model catalog."
             )
-        if not args.skip_model_picker and sys.stdin.isatty():
-            if codex_added:
-                print(
-                    "\nChoose the Codex CLI model next. It is a separate provider "
-                    "and will not appear in OpenRouter searches."
+    else:
+        remote_detected = bool(discover_codex_cli()) or any(
+            os.environ.get(name)
+            for name in (
+                "OPENROUTER_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+                "GEMINI_API_KEY",
+            )
+        )
+        if args.allow_remote:
+            allow_remote = True
+        elif args.local_only or not remote_detected:
+            allow_remote = False
+        else:
+            print(
+                "Detected credentials for one or more remote model providers. "
+                "Selected repository source will be sent to each remote provider "
+                "shown in the scan roster."
+            )
+            if not sys.stdin.isatty():
+                raise ValueError(
+                    "non-interactive setup must specify --allow-remote or --local-only"
                 )
-                print(
-                    "After setup, use 'vulnhunter models --provider codex-cli' "
-                    "to change it again."
-                )
-                asyncio.run(
-                    _configure_models_interactively(
-                        config,
-                        provider_filter="codex-cli",
-                        offer_additional_models=False,
-                    )
-                )
-            else:
-                asyncio.run(_configure_models_interactively(config))
-            config = load_engine_config(path)
-        checks = asyncio.run(doctor(config, probe_models=False))
-        for row in checks:
-            marker = "✓" if row["ok"] else "✗"
-            print(f"{marker} {row['alias']}: {row['detail']}")
-        print("\nNext: vulnhunter doctor")
-        return 0
+            answer = input("Configure these remote providers? [y/N]: ").strip().lower()
+            allow_remote = answer in {"y", "yes"}
+        detections = write_initial_config(
+            path,
+            force=args.force,
+            allow_remote=allow_remote,
+        )
+        print(f"Wrote provider-neutral config: {path}")
+        for detection in detections:
+            print(f"  ✓ {detection}")
+        print("\nNo API keys were stored; the config references environment variables.")
+        if allow_remote:
+            print(
+                "Remote-provider consent was recorded. Remote providers receive source "
+                "only when selected and displayed at scan time."
+            )
+        else:
+            print("Setup is local-only; no remote provider was configured.")
 
-    remote_detected = bool(discover_codex_cli()) or any(
-        os.environ.get(name)
-        for name in (
-            "OPENROUTER_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "OPENAI_API_KEY",
-            "GEMINI_API_KEY",
-        )
+    setup_only = bool(
+        args.skip_model_picker or args.setup_only or not sys.stdin.isatty()
     )
-    if args.allow_remote:
-        allow_remote = True
-    elif args.local_only or not remote_detected:
-        allow_remote = False
-    else:
-        print(
-            "Detected credentials for one or more remote model providers. "
-            "Selected repository source will be sent to each remote provider "
-            "shown in the scan roster."
+    if not setup_only:
+        return asyncio.run(
+            _run_guided_init_scan(path, instructions=args.instructions)
         )
-        if not sys.stdin.isatty():
-            raise ValueError(
-                "non-interactive setup must specify --allow-remote or --local-only"
-            )
-        answer = input("Configure these remote providers? [y/N]: ").strip().lower()
-        allow_remote = answer in {"y", "yes"}
-    detections = write_initial_config(
-        path,
-        force=args.force,
-        allow_remote=allow_remote,
-    )
-    print(f"Wrote provider-neutral config: {path}")
-    for detection in detections:
-        print(f"  ✓ {detection}")
-    print("\nNo API keys were stored; the config references environment variables.")
-    if allow_remote:
-        print(
-            "Remote-provider consent was recorded. Remote providers receive source "
-            "only when selected and displayed at scan time."
-        )
-    else:
-        print("Setup is local-only; no remote provider was configured.")
+
     config = load_engine_config(path)
-    if not args.skip_model_picker and sys.stdin.isatty():
-        asyncio.run(_configure_models_interactively(config))
-        config = load_engine_config(path)
     checks = asyncio.run(doctor(config, probe_models=False))
     for row in checks:
         marker = "✓" if row["ok"] else "✗"
-        print(
-            f"{marker} {row['alias']}: {row['detail']}"
-        )
-    print("\nNext: vulnhunter doctor")
+        print(f"{marker} {row['alias']}: {row['detail']}")
+    print("\nSetup complete. Start a scan with: vulnhunter scan PATH")
     if args.instructions:
         print()
         print(render_instructions(args.instructions))
@@ -403,6 +398,135 @@ def _run_init(args: argparse.Namespace) -> int:
             "opencode|pi|codex|claude-code|generic"
         )
     return 0
+
+
+async def _run_guided_init_scan(path: Path, *, instructions: str | None) -> int:
+    """Run a guided first scan after provider setup."""
+    target, git_ref = _ask_scan_target()
+    level = _ask_level()
+    count = _ask_initial_model_count()
+    base_config = load_engine_config(path, apply_model_defaults=False)
+    await _configure_fresh_model_roster(base_config, target_count=count)
+
+    while True:
+        config = load_engine_config(path)
+        checks = await doctor(config, probe_models=False)
+        _print_guided_scan_summary(config, target, git_ref, level)
+        unhealthy = [row for row in checks if not row["ok"]]
+        if unhealthy:
+            print(_paint("\nProvider warnings:", _YELLOW))
+            for row in unhealthy:
+                print(_paint(f"  - {row['alias']}: {row['detail']}", _YELLOW))
+        answer = input(
+            "\nStart this scan? [Y]es / [C]hange / [N] save setup only: "
+        ).strip().lower()
+        if answer in {"", "y", "yes"}:
+            if unhealthy:
+                print(
+                    _paint(
+                        "Cannot start while a selected provider fails preflight. "
+                        "Fix the provider and choose Y to retry, choose C to change "
+                        "the team, or N to save without scanning.",
+                        _YELLOW,
+                    )
+                )
+                continue
+            break
+        if answer in {"n", "no"}:
+            print("Configuration saved. Start later with: vulnhunter scan PATH")
+            if instructions:
+                print("\n" + render_instructions(instructions))
+            return 0
+        if answer not in {"c", "change"}:
+            print("Choose Y to start, C to change, or N to save without scanning.")
+            continue
+        print("\nChange configuration:")
+        print("  1. Repository target or Git ref")
+        print("  2. Scan depth")
+        print("  3. Core model team")
+        choice = input("Choose 1-3, or Enter to return: ").strip()
+        if choice == "1":
+            target, git_ref = _ask_scan_target(current=target, current_ref=git_ref)
+        elif choice == "2":
+            level = _ask_level()
+        elif choice == "3":
+            count = _ask_initial_model_count(default=len(config.models))
+            base_config = load_engine_config(path, apply_model_defaults=False)
+            await _configure_fresh_model_roster(base_config, target_count=count)
+
+    scan_argv = [
+        "scan",
+        target,
+        "--config",
+        str(path),
+        "--level",
+        level.value,
+        "--models",
+        str(len(load_engine_config(path).models)),
+        "--yes",
+    ]
+    if git_ref:
+        scan_argv.extend(["--ref", git_ref])
+    scan_args = build_parser().parse_args(scan_argv)
+    return await _run_scan(scan_args)
+
+
+def _ask_scan_target(
+    *, current: str = ".", current_ref: str | None = None
+) -> tuple[str, str | None]:
+    raw = input(f"Repository path or Git URL [{current}]: ").strip()
+    target = (raw or current).strip('"')
+    candidate = Path(target).expanduser()
+    if not candidate.is_dir() and not _looks_like_git_url(target):
+        raise ValueError(
+            "repository must be an existing local directory or a Git URL"
+        )
+    ref_prompt = current_ref or "current/default"
+    raw_ref = input(
+        f"Git branch, tag, or commit [{ref_prompt}; Enter keeps default]: "
+    ).strip()
+    git_ref = raw_ref or current_ref
+    if git_ref and candidate.is_dir() and not (candidate / ".git").exists():
+        raise ValueError("a Git ref requires a Git repository target")
+    return target, git_ref
+
+
+def _ask_initial_model_count(*, default: int = 1) -> int:
+    raw = input(f"How many core models? [1-3, default {default}]: ").strip()
+    if not raw:
+        return default
+    try:
+        count = int(raw)
+    except ValueError as exc:
+        raise ValueError("core model count must be a number") from exc
+    if count < 1 or count > 3:
+        raise ValueError("core model count must be between 1 and 3")
+    return count
+
+
+def _print_guided_scan_summary(
+    config: EngineConfig,
+    target: str,
+    git_ref: str | None,
+    level: ScanLevel,
+) -> None:
+    print("\n" + _paint("Scan configuration", _WHITE_BOLD))
+    print(f"  Repository: {target}")
+    print(f"  Git ref: {git_ref or 'current checkout / remote default'}")
+    print(f"  Depth: {level.value}")
+    print(f"  Core models: {len(config.models)}")
+    for index, model in enumerate(config.models.values(), start=1):
+        exposure = "REMOTE — source is sent" if model.remote else "local"
+        reasoning = (
+            f", reasoning {model.reasoning_effort}"
+            if model.reasoning_effort != "auto"
+            else ""
+        )
+        print(
+            f"    {index}. {model.provider}/{model.model} "
+            f"({exposure}{reasoning})"
+        )
+    print("  Execution: static/read-only")
 
 
 async def _run_doctor(args: argparse.Namespace) -> int:
@@ -448,6 +572,14 @@ async def _run_doctor(args: argparse.Namespace) -> int:
 
 async def _run_scan(args: argparse.Namespace) -> int:
     config = load_engine_config(args.config)
+    prompted = 0
+    if args.level:
+        level = ScanLevel(args.level)
+    elif args.yes:
+        level = ScanLevel.QUICK
+    else:
+        level = _ask_level()
+        prompted += 1
     progress = _make_progress_handler(
         quiet=bool(args.json),
         verbose=bool(args.verbose),
@@ -459,7 +591,9 @@ async def _run_scan(args: argparse.Namespace) -> int:
             {"path": str(Path(args.log_file).expanduser().resolve())},
         )
     progress("repository_prepare_started", {"target": args.target})
-    repository = _resolve_target(args.target, resume=args.resume)
+    repository = _resolve_target(
+        args.target, resume=args.resume, git_ref=getattr(args, "ref", None)
+    )
     progress("repository_prepare_complete", {"repository": str(repository)})
     progress("inventory_started", {"repository": str(repository)})
     inventory = build_inventory(repository)
@@ -484,15 +618,6 @@ async def _run_scan(args: argparse.Namespace) -> int:
         for failure in failed_health:
             print(_paint(f"  - {failure}", _YELLOW))
 
-    prompted = 0
-    if args.level:
-        level = ScanLevel(args.level)
-    elif args.yes:
-        level = ScanLevel.QUICK
-    else:
-        level = _ask_level()
-        prompted += 1
-
     specialists = _resolve_specialists(config, args.specialist)
     unavailable_specialists = [
         row.model_alias
@@ -510,9 +635,13 @@ async def _run_scan(args: argparse.Namespace) -> int:
         if missing:
             raise ValueError(f"requested models are unavailable: {', '.join(missing)}")
         selected_aliases = list(dict.fromkeys(args.team_model))
+        if len(selected_aliases) > 3:
+            raise ValueError("a core team cannot contain more than three models")
         if args.models and args.models != len(selected_aliases):
             raise ValueError("--models must match the number of --team-model values")
     elif args.models:
+        if args.models > 3:
+            raise ValueError("--models cannot exceed 3")
         if args.models > len(healthy_aliases):
             raise ValueError(
                 f"requested {args.models} models, but only "
@@ -540,7 +669,7 @@ async def _run_scan(args: argparse.Namespace) -> int:
             )
             if count == 0:
                 raise ValueError("model customization was already completed")
-        selected_aliases = _select_aliases(config, healthy_aliases, count)
+        selected_aliases = _choose_team_aliases(config, healthy_aliases, count)
 
     selected = [config.models[alias] for alias in selected_aliases]
     specialist_models = [
@@ -687,6 +816,13 @@ def _print_scan_summary(manifest: dict[str, Any], results_dir: Path) -> None:
                 _YELLOW,
             )
         )
+        print(
+            "Resume:  "
+            + _paint(
+                f'vulnhunter scan --resume "{results_dir}"',
+                _CYAN_BOLD,
+            )
+        )
 
 
 async def _model_health(
@@ -694,6 +830,12 @@ async def _model_health(
     *,
     progress: Any | None = None,
 ) -> list[tuple[str, bool, str]]:
+    serial_locks = {
+        name: asyncio.Lock()
+        for name, provider in config.providers.items()
+        if provider.kind == "codex_cli"
+    }
+
     async def check(alias: str) -> tuple[str, bool, str]:
         model = config.models[alias]
         if progress is not None:
@@ -702,7 +844,12 @@ async def _model_health(
                 {"model": alias, "provider": model.provider, "identity": model.model},
             )
         provider = create_provider(config.providers[model.provider])
-        ok, detail = await provider.health(model)
+        lock = serial_locks.get(model.provider)
+        if lock is None:
+            ok, detail = await provider.health(model)
+        else:
+            async with lock:
+                ok, detail = await provider.health(model)
         if progress is not None:
             progress(
                 "model_preflight_complete",
@@ -1372,7 +1519,8 @@ def _ask_model_count(
             print(
                 f"  + {specialist.profile}: {specialist.model_alias} ({locality})"
             )
-    for count in range(1, len(healthy_aliases) + 1):
+    maximum = min(3, len(healthy_aliases))
+    for count in range(1, maximum + 1):
         aliases = _select_aliases(config, healthy_aliases, count)
         models = [config.models[alias] for alias in aliases]
         estimate = estimate_scan(
@@ -1406,9 +1554,35 @@ def _ask_model_count(
         count = int(raw)
     except ValueError as exc:
         raise ValueError("model count must be a number") from exc
-    if count < 1 or count > len(healthy_aliases):
-        raise ValueError(f"model count must be between 1 and {len(healthy_aliases)}")
+    if count < 1 or count > maximum:
+        raise ValueError(f"model count must be between 1 and {maximum}")
     return count
+
+
+def _choose_team_aliases(
+    config: EngineConfig, healthy_aliases: list[str], count: int
+) -> list[str]:
+    """Let the user choose members when only part of the saved roster will run."""
+    ordered = _select_aliases(config, healthy_aliases, len(healthy_aliases))
+    if count >= len(ordered):
+        return ordered
+    print("\nChoose models for this scan:")
+    for index, alias in enumerate(ordered, start=1):
+        print(f"  {index}. {alias}: {_model_summary(config.models[alias])}")
+    selected: list[str] = []
+    for slot in range(1, count + 1):
+        raw = input(f"Model {slot} [default {slot}]: ").strip() or str(slot)
+        try:
+            index = int(raw) - 1
+        except ValueError as exc:
+            raise ValueError("model selection must be a number") from exc
+        if index < 0 or index >= len(ordered):
+            raise ValueError(f"model selection must be between 1 and {len(ordered)}")
+        alias = ordered[index]
+        if alias in selected:
+            raise ValueError("each core model must be selected only once")
+        selected.append(alias)
+    return selected
 
 
 async def _run_models(args: argparse.Namespace) -> int:
@@ -1503,6 +1677,135 @@ async def _discover_provider_models(
         }
         for name, models, metadata, account, error in rows
     }
+
+
+async def _configure_fresh_model_roster(
+    config: EngineConfig,
+    *,
+    discovered: dict[str, dict[str, Any]] | None = None,
+    target_count: int | None = None,
+) -> None:
+    """Select and persist a fresh one-to-three-model default core team."""
+    if target_count is None:
+        print(
+            "\nBuild the default core team "
+            "(the previous saved roster will be replaced)"
+        )
+        target_count = _ask_initial_model_count()
+    if target_count < 1 or target_count > 3:
+        raise ValueError("core model count must be between 1 and 3")
+
+    discovered = discovered or await _discover_provider_models(config)
+    provider_order = sorted(
+        config.providers,
+        key=lambda name: (
+            0 if config.providers[name].kind == "codex_cli" else 1,
+            0 if not config.providers[name].remote else 1,
+            name,
+        ),
+    )
+    selectable = {
+        name: row
+        for name, row in discovered.items()
+        if not row.get("error") and row.get("models")
+    }
+    if not selectable:
+        failures = "; ".join(
+            f"{name}: {row.get('error') or 'no models returned'}"
+            for name, row in discovered.items()
+        )
+        raise RuntimeError(f"no provider model catalogs are available ({failures})")
+
+    total_available = sum(len(row["models"]) for row in selectable.values())
+    if target_count > total_available:
+        raise ValueError(
+            f"requested {target_count} core models, but providers returned only "
+            f"{total_available} distinct models"
+        )
+
+    base_aliases: dict[str, list[str]] = {}
+    for alias, model in sorted(config.models.items(), key=lambda item: item[1].priority):
+        base_aliases.setdefault(model.provider, []).append(alias)
+    selected: list[ModelSpec] = []
+    identities: set[tuple[str, str]] = set()
+    used_aliases: set[str] = set()
+    for slot in range(1, target_count + 1):
+        available = {
+            name: {
+                **row,
+                "models": [
+                    model_id
+                    for model_id in row["models"]
+                    if (name, model_id) not in identities
+                ],
+            }
+            for name, row in selectable.items()
+            if any((name, model_id) not in identities for model_id in row["models"])
+        }
+        choice = _browse_provider_model_list(
+            title=f"Choose core model {slot} of {target_count}",
+            discovered=available,
+            provider_order=[name for name in provider_order if name in available],
+            current_identities={},
+            allow_done=False,
+        )
+        assert choice is not None
+        provider_name, model_id = choice
+        template = next(
+            model for model in config.models.values() if model.provider == provider_name
+        )
+        alias = next(
+            (
+                candidate
+                for candidate in base_aliases.get(provider_name, [])
+                if candidate not in used_aliases
+            ),
+            "",
+        )
+        if not alias:
+            alias_number = 2
+            alias = f"{provider_name}-{alias_number}"
+            while alias in used_aliases or alias in config.models:
+                alias_number += 1
+                alias = f"{provider_name}-{alias_number}"
+        details = available[provider_name].get("metadata", {}).get(model_id, {})
+        reasoning = _choose_reasoning_effort(model_id, details, current="auto")
+        selected.append(
+            replace(
+                template,
+                alias=alias,
+                model=model_id,
+                priority=slot,
+                context_tokens=int(
+                    details.get("context_tokens") or template.context_tokens
+                ),
+                input_cost_per_million=(
+                    float(details["input_cost_per_million"])
+                    if details.get("input_cost_per_million") is not None
+                    else None
+                ),
+                output_cost_per_million=(
+                    float(details["output_cost_per_million"])
+                    if details.get("output_cost_per_million") is not None
+                    else None
+                ),
+                reasoning_effort=reasoning,
+                supported_reasoning_efforts=tuple(
+                    str(value)
+                    for value in details.get("supported_reasoning_efforts", [])
+                ),
+                billing_label=str(details.get("billing_label", "")),
+            )
+        )
+        identities.add((provider_name, model_id))
+        used_aliases.add(alias)
+        print(
+            f"Selected {_paint(provider_name, _MAGENTA_BOLD)} / "
+            f"{_paint(model_id, _CYAN_BOLD)} ({slot} of {target_count})."
+        )
+
+    path = save_model_roster(config, selected)
+    print(f"Saved fresh {target_count}-model core roster: {path}")
 
 
 async def _configure_models_interactively(
@@ -1638,10 +1941,8 @@ async def _configure_models_interactively(
         (model.provider, selections.get(alias, model.model))
         for alias, model in config.models.items()
     }
-    next_number = 2
-    while any(alias.endswith(f"-{next_number}") for alias in config.models):
-        next_number += 1
-    ordinal = {2: "second", 3: "third"}.get(next_number, f"#{next_number}")
+    next_number = len(config.models) + 1
+    ordinal = _model_ordinal(next_number)
     while input(f"Add a {ordinal} core model? [y/N]: ").strip().lower() in {"y", "yes"}:
         available = {
             name: row
@@ -1678,10 +1979,11 @@ async def _configure_models_interactively(
         template = next(
             model for model in config.models.values() if model.provider == provider_name
         )
-        alias = f"{provider_name}-{next_number}"
+        alias_number = next_number
+        alias = f"{provider_name}-{alias_number}"
         while alias in config.models:
-            next_number += 1
-            alias = f"{provider_name}-{next_number}"
+            alias_number += 1
+            alias = f"{provider_name}-{alias_number}"
         selected_details = (
             discovered[provider_name]
             .get("metadata", {})
@@ -1731,8 +2033,28 @@ async def _configure_models_interactively(
             f"{_paint(f'{provider_name}/{selected_model}', _CYAN_BOLD)}"
         )
         print(f"Saved core-team roster: {path}")
-        next_number += 1
-        ordinal = {2: "second", 3: "third"}.get(next_number, f"#{next_number}")
+        next_number = len(config.models) + 1
+        ordinal = _model_ordinal(next_number)
+
+
+def _model_ordinal(number: int) -> str:
+    """Return a readable ordinal for the add-to-team prompt."""
+    words = {
+        1: "first",
+        2: "second",
+        3: "third",
+        4: "fourth",
+        5: "fifth",
+        6: "sixth",
+        7: "seventh",
+        8: "eighth",
+        9: "ninth",
+        10: "tenth",
+    }
+    if number in words:
+        return words[number]
+    suffix = "th" if 10 <= number % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    return f"{number}{suffix}"
 
 
 def _browse_provider_model_list(
@@ -2108,21 +2430,35 @@ def _print_preflight(
     )
 
 
-def _resolve_target(target: str, *, resume: str | None) -> Path:
+def _resolve_target(
+    target: str,
+    *,
+    resume: str | None,
+    git_ref: str | None = None,
+) -> Path:
     if resume:
+        if git_ref:
+            raise ValueError("--ref cannot be combined with --resume")
         state_path = Path(resume).expanduser() / "run_state.json"
         if not state_path.is_file():
             raise FileNotFoundError(f"resume state not found: {state_path}")
         state = json.loads(state_path.read_text(encoding="utf-8"))
         return Path(state["repository"]).resolve()
     candidate = Path(target).expanduser()
-    if candidate.is_dir():
+    if candidate.is_dir() and not git_ref:
         return candidate.resolve()
-    if not _looks_like_git_url(target):
+    if not candidate.is_dir() and not _looks_like_git_url(target):
         raise FileNotFoundError(f"local repository not found: {candidate}")
     if shutil.which("git") is None:
         raise RuntimeError("git is required to scan a repository URL")
-    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", target.rstrip("/").split("/")[-1])
+    if git_ref and (git_ref.startswith("-") or "\x00" in git_ref):
+        raise ValueError("Git ref cannot begin with '-' or contain a null byte")
+    target_name = (
+        candidate.resolve().name
+        if candidate.is_dir()
+        else target.rstrip("/").split("/")[-1]
+    )
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", target_name)
     slug = re.sub(r"\.git$", "", slug) or "repository"
     destination = Path.home() / ".vulnhunter" / "clones" / slug
     if destination.exists():
@@ -2131,16 +2467,46 @@ def _resolve_target(target: str, *, resume: str | None) -> Path:
             suffix += 1
         destination = destination.with_name(f"{slug}-{suffix}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    completed = subprocess.run(
-        ["git", "clone", "--depth", "1", target, str(destination)],
-        capture_output=True,
-        text=True,
-        timeout=300,
-        shell=False,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(f"git clone failed: {completed.stderr.strip()}")
+    if git_ref:
+        origin = str(candidate.resolve()) if candidate.is_dir() else target
+        commands = [
+            ["git", "init", str(destination)],
+            [
+                "git",
+                "-C",
+                str(destination),
+                "remote",
+                "add",
+                "origin",
+                origin,
+            ],
+            ["git", "-C", str(destination), "fetch", "--depth", "1", "origin", git_ref],
+            ["git", "-C", str(destination), "checkout", "--detach", "FETCH_HEAD"],
+        ]
+        for command in commands:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                shell=False,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    f"git checkout of {git_ref!r} failed: {completed.stderr.strip()}"
+                )
+    else:
+        completed = subprocess.run(
+            ["git", "clone", "--depth", "1", target, str(destination)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            shell=False,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(f"git clone failed: {completed.stderr.strip()}")
     return destination.resolve()
 
 

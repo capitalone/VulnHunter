@@ -48,7 +48,11 @@ class EngineConfig:
     source_path: Path | None = None
 
 
-def load_engine_config(path: str | os.PathLike[str] | None = None) -> EngineConfig:
+def load_engine_config(
+    path: str | os.PathLike[str] | None = None,
+    *,
+    apply_model_defaults: bool = True,
+) -> EngineConfig:
     config_path = Path(path).expanduser() if path else DEFAULT_CONFIG_PATH
     if not config_path.is_file():
         raise FileNotFoundError(
@@ -57,7 +61,7 @@ def load_engine_config(path: str | os.PathLike[str] | None = None) -> EngineConf
     with config_path.open("rb") as handle:
         raw = tomllib.load(handle)
     config = parse_engine_config(raw, source_path=config_path.resolve())
-    return _apply_saved_model_defaults(config)
+    return _apply_saved_model_defaults(config) if apply_model_defaults else config
 
 
 def model_defaults_path(config_path: Path) -> Path:
@@ -159,6 +163,68 @@ def save_additional_model(config: EngineConfig, model: ModelSpec) -> Path:
     payload.update({"schema_version": "1", "additional_models": additions})
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    os.replace(temporary, destination)
+    return destination
+
+
+def save_model_roster(config: EngineConfig, roster: list[ModelSpec]) -> Path:
+    """Replace the saved active core roster with an exact ordered selection."""
+    if config.source_path is None:
+        raise ValueError("cannot save a model roster for an in-memory config")
+    if not roster:
+        raise ValueError("model roster must contain at least one model")
+    if len(roster) > 3:
+        raise ValueError("model roster cannot contain more than three models")
+
+    base_aliases = set(config.models)
+    selections: dict[str, str] = {}
+    metadata: dict[str, dict[str, float | int | str]] = {}
+    additions: list[dict[str, Any]] = []
+    for model in roster:
+        if model.provider not in config.providers:
+            raise ValueError(f"unknown provider {model.provider!r}")
+        row = {
+            "context_tokens": model.context_tokens,
+            "input_cost_per_million": model.input_cost_per_million,
+            "output_cost_per_million": model.output_cost_per_million,
+            "reasoning_effort": model.reasoning_effort,
+        }
+        metadata[model.alias] = {
+            key: value for key, value in row.items() if value is not None
+        }
+        if model.alias in base_aliases:
+            selections[model.alias] = model.model
+            continue
+        additions.append(
+            {
+                "alias": model.alias,
+                "provider": model.provider,
+                "model": model.model,
+                "priority": model.priority,
+                "context_tokens": model.context_tokens,
+                "input_cost_per_million": model.input_cost_per_million,
+                "output_cost_per_million": model.output_cost_per_million,
+                "reasoning_effort": model.reasoning_effort,
+                "supported_reasoning_efforts": list(
+                    model.supported_reasoning_efforts
+                ),
+                "billing_label": model.billing_label,
+            }
+        )
+
+    destination = model_defaults_path(config.source_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    payload = {
+        "schema_version": "1",
+        "models": selections,
+        "model_metadata": metadata,
+        "additional_models": additions,
+        "active_model_aliases": [model.alias for model in roster],
+    }
     temporary.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -456,6 +522,19 @@ def _apply_saved_model_defaults(config: EngineConfig) -> EngineConfig:
             billing_label=str(row.get("billing_label", template.billing_label)),
         )
         identities.add((provider_name, model_id))
+    active_aliases = payload.get("active_model_aliases")
+    if active_aliases is not None:
+        if not isinstance(active_aliases, list):
+            raise ValueError(
+                f"invalid saved model defaults at {path}: "
+                "active_model_aliases must be a list"
+            )
+        active = [str(alias) for alias in active_aliases if str(alias) in models]
+        if not active:
+            raise ValueError(
+                f"invalid saved model defaults at {path}: active roster is empty"
+            )
+        models = {alias: models[alias] for alias in active}
     return replace(config, models=models)
 
 

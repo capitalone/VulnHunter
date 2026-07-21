@@ -74,6 +74,11 @@ class ScanEngine:
         self._free_request_lock = asyncio.Lock()
         self._last_free_request_at = 0.0
         self._free_team_mode = False
+        self._serial_provider_locks = {
+            name: asyncio.Lock()
+            for name, provider in config.providers.items()
+            if provider.kind == "codex_cli"
+        }
         self._progress_callback = progress
 
     def _progress(self, event: str, **details: Any) -> None:
@@ -648,12 +653,6 @@ class ScanEngine:
             async with semaphore:
                 reservation: tuple[int, float] | None = None
                 try:
-                    self._progress(
-                        "assignment_started",
-                        assignment=assignment.assignment_id,
-                        model=assignment.model_alias,
-                        kind=str(assignment.kind),
-                    )
                     reservation = await budget.reserve(
                         self.config.models[assignment.model_alias],
                         estimated_input_tokens=max(
@@ -666,12 +665,26 @@ class ScanEngine:
                             // 4,
                         ),
                     )
-                    worker = self._hunt_worker(
-                        assignment,
-                        root=root,
-                        inventory=inventory,
-                        request=request,
-                        sweep=sweep or assignment.kind == AssignmentKind.SWEEP,
+                    async def perform_worker() -> tuple[dict[str, Any], Usage]:
+                        self._progress(
+                            "assignment_started",
+                            assignment=assignment.assignment_id,
+                            model=assignment.model_alias,
+                            kind=str(assignment.kind),
+                        )
+                        return await self._hunt_worker(
+                            assignment,
+                            root=root,
+                            inventory=inventory,
+                            request=request,
+                            sweep=(
+                                sweep or assignment.kind == AssignmentKind.SWEEP
+                            ),
+                        )
+
+                    worker = self._run_with_provider_limit(
+                        assignment.provider,
+                        perform_worker,
                     )
                     remaining = budget.remaining_duration()
                     payload, usage = await (
@@ -764,6 +777,18 @@ class ScanEngine:
         if unexpected:
             raise unexpected[0]
         return [row for row in gathered if isinstance(row, tuple)]
+
+    async def _run_with_provider_limit(
+        self,
+        provider_name: str,
+        factory: Callable[[], Awaitable[tuple[dict[str, Any], Usage]]],
+    ) -> tuple[dict[str, Any], Usage]:
+        """Serialize providers whose local session state is not concurrency-safe."""
+        lock = self._serial_provider_locks.get(provider_name)
+        if lock is None:
+            return await factory()
+        async with lock:
+            return await factory()
 
     async def _hunt_worker(
         self,

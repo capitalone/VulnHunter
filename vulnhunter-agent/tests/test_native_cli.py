@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 from pathlib import Path
 
 from vulnhunter.cli import (
@@ -11,15 +12,19 @@ from vulnhunter.cli import (
     _browse_model_list,
     _browse_provider_model_list,
     _configure_models_interactively,
+    _configure_fresh_model_roster,
+    _choose_team_aliases,
     _load_env_file,
     _live_scan_summary,
     _make_progress_handler,
     _choose_reasoning_effort,
     _render_progress,
+    _resolve_target,
+    _run_guided_init_scan,
     _set_color_mode,
     main,
 )
-from vulnhunter.config import load_engine_config, parse_engine_config
+from vulnhunter.config import load_engine_config, parse_engine_config, save_model_roster
 from vulnhunter.inventory import build_inventory
 from vulnhunter.models import ScanLevel
 
@@ -59,6 +64,14 @@ def test_scan_wizard_uses_two_questions(monkeypatch, tmp_path: Path) -> None:
     assert level == ScanLevel.STANDARD
     assert count == 2
     assert len(calls) == 2
+
+
+def test_scan_subset_picker_chooses_specific_saved_model(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "2")
+
+    selected = _choose_team_aliases(_config(), ["a", "b"], 1)
+
+    assert selected == ["b"]
 
 
 def test_reasoning_picker_offers_auto_and_supported_levels(monkeypatch) -> None:
@@ -190,7 +203,7 @@ def test_init_reuses_existing_config_without_force(
     assert "Using existing VulnHunter config" in capsys.readouterr().out
 
 
-def test_init_opens_new_codex_provider_picker_directly(
+def test_setup_only_init_adds_codex_without_starting_scan_wizard(
     monkeypatch, tmp_path: Path, capsys
 ) -> None:
     config_path = tmp_path / "config.toml"
@@ -205,8 +218,6 @@ def test_init_opens_new_codex_provider_picker_directly(
         "remote = true\n",
         encoding="utf-8",
     )
-    picker_filters: list[str | None] = []
-
     monkeypatch.setattr(
         "vulnhunter.cli.discover_codex_cli",
         lambda: {
@@ -218,34 +229,157 @@ def test_init_opens_new_codex_provider_picker_directly(
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _prompt: "y")
 
-    async def configure(
-        _config,
-        *,
-        provider_filter=None,
-        discovered=None,
-        offer_additional_models=True,
-    ):
-        del discovered
-        picker_filters.append(
-            f"{provider_filter}:{offer_additional_models}"
-        )
-
     async def healthy(_config, *, probe_models=True):
         del probe_models
         return []
 
-    monkeypatch.setattr(
-        "vulnhunter.cli._configure_models_interactively", configure
-    )
     monkeypatch.setattr("vulnhunter.cli.doctor", healthy)
 
-    assert main(["init", "--config", str(config_path)]) == 0
+    assert main(["init", "--config", str(config_path), "--setup-only"]) == 0
 
     output = capsys.readouterr().out
-    assert picker_filters == ["codex-cli:False"]
-    assert "separate provider" in output
-    assert "will not appear in OpenRouter searches" in output
+    assert "Added Codex CLI provider" in output
     assert "[providers.codex-cli]" in config_path.read_text(encoding="utf-8")
+
+
+def test_guided_init_collects_target_depth_team_and_confirmation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[providers.local]\n"
+        'kind = "openai_compatible"\n'
+        'base_url = "http://local"\n'
+        "remote = false\n\n"
+        "[models.local]\n"
+        'provider = "local"\n'
+        'model = "coder"\n'
+        "remote = false\n",
+        encoding="utf-8",
+    )
+    answers = iter([str(repo), "", "2", "1", ""])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    async def configure(config, *, discovered=None, target_count=None):
+        del discovered
+        assert target_count == 1
+        save_model_roster(config, [next(iter(config.models.values()))])
+
+    async def healthy(_config, *, probe_models=True):
+        del probe_models
+        return [
+            {
+                "alias": "local",
+                "provider": "local",
+                "model": "coder",
+                "remote": False,
+                "ok": True,
+                "detail": "ok",
+            }
+        ]
+
+    captured = {}
+
+    async def scan(args):
+        captured.update(vars(args))
+        return 0
+
+    monkeypatch.setattr("vulnhunter.cli._configure_fresh_model_roster", configure)
+    monkeypatch.setattr("vulnhunter.cli.doctor", healthy)
+    monkeypatch.setattr("vulnhunter.cli._run_scan", scan)
+
+    assert asyncio.run(_run_guided_init_scan(config_path, instructions=None)) == 0
+    assert captured["target"] == str(repo)
+    assert captured["level"] == "standard"
+    assert captured["models"] == 1
+    assert captured["yes"] is True
+    assert captured["ref"] is None
+
+
+def test_guided_init_does_not_start_with_unhealthy_provider(
+    monkeypatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[providers.local]\n"
+        'kind = "openai_compatible"\n'
+        'base_url = "http://local"\n'
+        "remote = false\n\n"
+        "[models.local]\n"
+        'provider = "local"\n'
+        'model = "coder"\n'
+        "remote = false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "vulnhunter.cli._ask_scan_target", lambda: (str(repo), None)
+    )
+    monkeypatch.setattr("vulnhunter.cli._ask_level", lambda: ScanLevel.QUICK)
+    monkeypatch.setattr("vulnhunter.cli._ask_initial_model_count", lambda: 1)
+    answers = iter(["", "n"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    async def configure(config, *, discovered=None, target_count=None):
+        del discovered, target_count
+        save_model_roster(config, [next(iter(config.models.values()))])
+
+    async def unhealthy(_config, *, probe_models=True):
+        del probe_models
+        return [
+            {
+                "alias": "local",
+                "provider": "local",
+                "model": "coder",
+                "remote": False,
+                "ok": False,
+                "detail": "preflight failed",
+            }
+        ]
+
+    async def should_not_scan(_args):
+        raise AssertionError("scan should not start")
+
+    monkeypatch.setattr("vulnhunter.cli._configure_fresh_model_roster", configure)
+    monkeypatch.setattr("vulnhunter.cli.doctor", unhealthy)
+    monkeypatch.setattr("vulnhunter.cli._run_scan", should_not_scan)
+
+    assert asyncio.run(_run_guided_init_scan(config_path, instructions=None)) == 0
+
+
+def test_resolve_local_git_ref_uses_isolated_checkout(
+    monkeypatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "source"
+    repo.mkdir()
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    (repo / "app.py").write_text("print('v1')\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "app.py"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=VulnHunter Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "fixture",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    checkout = _resolve_target(str(repo), resume=None, git_ref="HEAD")
+
+    assert checkout != repo.resolve()
+    assert (checkout / "app.py").read_text(encoding="utf-8") == "print('v1')\n"
 
 
 def test_help_lists_commands_and_examples(capsys) -> None:
@@ -601,6 +735,87 @@ def test_model_picker_builds_and_persists_multi_model_roster(
             discovered={
                 "router": {
                     "models": ["vendor/first", "vendor/second"],
+                    "error": "",
+                }
+            },
+        )
+    )
+
+    reloaded = load_engine_config(config_path)
+    assert [model.model for model in reloaded.models.values()] == [
+        "vendor/first",
+        "vendor/second",
+    ]
+
+
+def test_model_picker_counts_mixed_provider_core_models(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[providers.router]\n"
+        'kind = "openrouter"\n\n'
+        "[providers.codex-cli]\n"
+        'kind = "codex_cli"\n\n'
+        "[models.router]\n"
+        'provider = "router"\n'
+        'model = "vendor/first"\n\n'
+        "[models.router-2]\n"
+        'provider = "router"\n'
+        'model = "vendor/second"\n\n'
+        "[models.router-3]\n"
+        'provider = "router"\n'
+        'model = "vendor/third"\n\n'
+        "[models.codex-cli]\n"
+        'provider = "codex-cli"\n'
+        'model = "gpt-test"\n',
+        encoding="utf-8",
+    )
+    prompts: list[str] = []
+    answers = iter(["", "n"])
+
+    def answer(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(answers)
+
+    monkeypatch.setattr("builtins.input", answer)
+    asyncio.run(
+        _configure_models_interactively(
+            load_engine_config(config_path),
+            discovered={
+                "router": {
+                    "models": ["vendor/first", "vendor/second", "vendor/third"],
+                    "error": "",
+                },
+                "codex-cli": {"models": ["gpt-test"], "error": ""},
+            },
+        )
+    )
+
+    assert "Add a fifth core model?" in prompts[-1]
+
+
+def test_fresh_roster_picker_selects_exact_count_and_replaces_old_team(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[providers.router]\n"
+        'kind = "openrouter"\n\n'
+        "[models.router]\n"
+        'provider = "router"\n'
+        'model = "vendor/first"\n',
+        encoding="utf-8",
+    )
+    config = load_engine_config(config_path, apply_model_defaults=False)
+    answers = iter(["2", "1", "1"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    asyncio.run(
+        _configure_fresh_model_roster(
+            config,
+            discovered={
+                "router": {
+                    "models": ["vendor/first", "vendor/second", "vendor/third"],
+                    "metadata": {},
                     "error": "",
                 }
             },

@@ -12,21 +12,27 @@ reimplement the scan phases in the host coding agent.
 2. Check `vulnhunter --version`. If it is unavailable, direct the user to the
    installation and provider setup in this repository's `README.md`. Do not
    silently install software or select a remote provider.
-3. For an ordinary interactive scan, run:
+3. For first-time setup and an ordinary interactive scan, run:
+
+   `vulnhunter init`
+
+   The CLI asks for the repository path or Git URL, optional branch/tag/commit,
+   scan depth, a one-to-three-model team, exact model choices, and final
+   Start/Change/Save-only confirmation. Do not ask duplicate questions in the
+   coding tool.
+4. After setup, a later interactive scan can run:
 
    `vulnhunter scan <absolute-repository-path>`
 
-   The CLI itself asks the only two operational questions: scan level and core
-   model count. The second screen can open the provider model browser with `m`;
-   model choices are retained for later scans. Do not ask duplicate questions
-   in the coding tool.
-4. For automation, use explicit values:
+   It begins with scan level and core model count and reuses the saved provider
+   configuration. Use `--ref` for an isolated branch, tag, or commit checkout.
+5. For automation, use explicit values:
 
    `vulnhunter scan <path> --level standard --models 2 --yes --json`
 
-5. Wait for the process to exit. Read `run_manifest.json` and `README.md` from
+6. Wait for the process to exit. Read `run_manifest.json` and `README.md` from
    the reported results directory.
-6. Treat `COMPLETE_CLEAN` as clean only when coverage is complete. Report
+7. Treat `COMPLETE_CLEAN` as clean only when coverage is complete. Report
    `COMPLETE_FINDINGS` and `COMPLETE_CONDITIONAL` distinctly. Never reinterpret
    `INCOMPLETE_LIMIT`, `INCOMPLETE_COVERAGE`, or `FAILED` as clean.
 
