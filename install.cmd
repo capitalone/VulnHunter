@@ -18,14 +18,6 @@ if not exist "%SKILLS_PARENT%" (
     mkdir "%SKILLS_PARENT%"
 )
 
-set "PYEXE="
-call :find_python
-if "%PYEXE%"=="" (
-    echo error: python 3.11+ not found ^(needed for vulnhunter-fix's bundled venv^). 1>&2
-    echo install Python 3.11+ from https://www.python.org/downloads/ and re-run install.cmd. 1>&2
-    exit /b 1
-)
-
 set "installed_any=0"
 for %%S in (vulnhunt vulnhunt-fix-verify vulnhunter-fix) do (
     call :install_one "%%S"
@@ -92,9 +84,17 @@ if "%name%"=="vulnhunter-fix" (
 endlocal & set "installed_any=1" & exit /b 0
 
 :build_vulnfix_venv
-setlocal
+setlocal EnableDelayedExpansion
 set "skill_dir=%~1"
 set "venv=%skill_dir%\.venv"
+
+set "PYEXE="
+call :find_python
+if "%PYEXE%"=="" (
+    echo error: python 3.11+ not found ^(needed for vulnhunter-fix's bundled venv^). 1>&2
+    echo install Python 3.11+ from https://www.python.org/downloads/ and re-run install.cmd. 1>&2
+    endlocal & exit /b 1
+)
 
 if exist "%venv%\" (
     rmdir /s /q "%venv%"
@@ -109,16 +109,26 @@ if not !ERRORLEVEL!==0 (
     endlocal & exit /b 1
 )
 
+rem Pin must stay in sync with install.sh's VULNFIX_DEPS and
+rem preflight.py's REQ-GRA-001.
+set VULNFIX_DEPS="jsonschema>=4.18" "graphifyy>=0.8.14,<0.9.0"
+
 "%venv%\Scripts\python.exe" -m pip install --quiet --disable-pip-version-check --upgrade pip
-echo   installing runtime deps into venv: jsonschema^>=4.18 graphifyy^>=0.8.14,^<0.9.0
-"%venv%\Scripts\python.exe" -m pip install --quiet --disable-pip-version-check "jsonschema>=4.18" "graphifyy>=0.8.14,<0.9.0"
+if not !ERRORLEVEL!==0 (
+    echo error: failed to upgrade pip in %venv% 1>&2
+    endlocal & exit /b 1
+)
+echo   installing runtime deps into venv: %VULNFIX_DEPS%
+"%venv%\Scripts\python.exe" -m pip install --quiet --disable-pip-version-check %VULNFIX_DEPS%
 if not !ERRORLEVEL!==0 (
     echo error: failed to install bundled deps into %venv% 1>&2
     endlocal & exit /b 1
 )
 
-rem Smoke test: the bootstrap must resolve both deps.
-call %PYEXE% -c "import sys; sys.path.insert(0, r'%skill_dir%\scripts'); import _skill_bootstrap; import jsonschema, graphify" >nul 2>&1
+rem Smoke test: run the venv's own interpreter directly (not %PYEXE%) so
+rem this tests the venv contents without depending on _skill_bootstrap's
+rem re-exec mechanism.
+"%venv%\Scripts\python.exe" -c "import jsonschema, graphify" >nul 2>&1
 if not !ERRORLEVEL!==0 (
     echo error: bootstrap smoke test failed -- venv built but jsonschema/graphify not importable. 1>&2
     echo        check %venv%\Lib\site-packages\ 1>&2

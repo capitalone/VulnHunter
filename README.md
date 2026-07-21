@@ -91,10 +91,10 @@ git clone https://github.com/capitalone/vulnhunter.git
 cd vulnhunter
 
 REM Copy skills into %USERPROFILE%\.claude\skills\
-install.cmd
+.\install.cmd
 
 REM (Optional) To clean up or remove installed skills
-REM uninstall.cmd
+REM .\uninstall.cmd
 ```
 
 > [!NOTE]

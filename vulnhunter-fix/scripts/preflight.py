@@ -110,9 +110,32 @@ def check_claude_cli():
         check("Claude CLI", False, "cannot determine version")
 
 
+def _free_disk_bytes(path: str) -> int:
+    """Free disk space in bytes for the volume containing ``path``.
+
+    os.statvfs doesn't exist on Windows — the CRT has no statvfs() for
+    CPython to wrap — so this queries GetDiskFreeSpaceExW via ctypes there
+    instead.
+    """
+    if os.name == "nt":
+        import ctypes
+
+        free_bytes = ctypes.c_ulonglong(0)
+        if not ctypes.windll.kernel32.GetDiskFreeSpaceExW(
+            ctypes.c_wchar_p(os.path.abspath(path)), None, None, ctypes.byref(free_bytes)
+        ):
+            raise OSError("GetDiskFreeSpaceExW failed")
+        return free_bytes.value
+    stat = os.statvfs(path)
+    return stat.f_bavail * stat.f_frsize
+
+
 def check_disk_space():
-    stat = os.statvfs(".")
-    free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+    try:
+        free_gb = _free_disk_bytes(".") / (1024 ** 3)
+    except (OSError, AttributeError):
+        check("Disk space", True, "cannot determine — skipping check")
+        return
     passed = free_gb >= 5.0
     check(
         f"Disk space ({free_gb:.1f} GB free)",
@@ -121,14 +144,42 @@ def check_disk_space():
     )
 
 
+def _total_memory_bytes() -> int:
+    """Total physical RAM in bytes. os.sysconf doesn't exist on Windows —
+    the CRT has no sysconf() for CPython to wrap — so this queries
+    GlobalMemoryStatusEx via ctypes there instead.
+    """
+    if os.name == "nt":
+        import ctypes
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        stat = MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            raise OSError("GlobalMemoryStatusEx failed")
+        return stat.ullTotalPhys
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+
+
 def check_memory():
     try:
-        mem_bytes = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-        mem_gb = mem_bytes / (1024 ** 3)
+        mem_gb = _total_memory_bytes() / (1024 ** 3)
         cpus = os.cpu_count() or 1
         slots = max(1, min(cpus, int(mem_gb // 4), 8))
         check(f"Memory ({mem_gb:.1f} GB, {cpus} CPUs → {slots} parallel slots)", True)
-    except (ValueError, OSError):
+    except (ValueError, OSError, AttributeError):
         check("Memory", True, "cannot determine — will default to conservative settings")
 
 
@@ -379,8 +430,17 @@ def _print_bootstrap_hint():
         return  # Deps ARE importable — some other check is failing; no hint needed.
 
     skill_dir = os.path.expanduser("~/.claude/skills/vulnhunter-fix")
-    install_sh = os.path.join(skill_dir, "install.sh")
-    venv_python = os.path.join(skill_dir, ".venv", "bin", "python3")
+    skill_installed = os.path.isfile(os.path.join(skill_dir, "SKILL.md"))
+    # install.sh/install.cmd live at the repo root and are never copied into
+    # the installed skill dir by either installer, so the remediation hint
+    # can only ever point back at the user's source checkout, not a path
+    # under skill_dir — there is nothing there to run.
+    if os.name == "nt":
+        venv_python = os.path.join(skill_dir, ".venv", "Scripts", "python.exe")
+        run_install_hint = "    install.cmd"
+    else:
+        venv_python = os.path.join(skill_dir, ".venv", "bin", "python3")
+        run_install_hint = "    bash install.sh"
 
     print("\nBootstrap hint:")
     if os.path.isfile(venv_python):
@@ -392,20 +452,22 @@ def _print_bootstrap_hint():
         print("  installed skill's scripts import _skill_bootstrap (they do")
         print("  by default) and re-run preflight — the re-exec will")
         print("  transparently switch to the bundled Python 3.11.")
-        print("  If that still fails, rebuild the venv:")
-        print(f"    bash {install_sh}")
-    elif os.path.isfile(install_sh):
-        # Installed skill dir exists but no venv → installer never ran or
-        # ran with an older install.sh that predates the venv bundling.
-        print(f"  Install script found but bundled venv is missing:")
-        print(f"    bash {install_sh}")
-        print("  This creates ~/.claude/skills/vulnhunter-fix/.venv/ and")
+        print("  If that still fails, rebuild the venv from your")
+        print("  vulnhunter-fix source checkout:")
+        print(run_install_hint)
+    elif skill_installed:
+        # Skill dir exists (SKILL.md present) but no venv → installer never
+        # ran, or ran with an older installer that predates venv bundling.
+        print("  Skill is installed but the bundled venv is missing.")
+        print("  From your vulnhunter-fix source checkout:")
+        print(run_install_hint)
+        print(f"  This creates {skill_dir}{os.sep}.venv{os.sep} and")
         print("  installs graphifyy + jsonschema into it.")
     else:
         # Not installed at all.
-        print("  No installed skill at ~/.claude/skills/vulnhunter-fix/.")
+        print(f"  No installed skill at {skill_dir}.")
         print("  From your vulnhunter-fix source checkout:")
-        print("    bash install.sh")
+        print(run_install_hint)
 
 
 if __name__ == "__main__":
