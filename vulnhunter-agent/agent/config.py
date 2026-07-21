@@ -780,6 +780,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
                 else []
             )
             if str(p).strip()
+        ),
         max_comment_pages=int(
             _resolve(verify_raw, "verify", "max_comment_pages", kind=int, default=20)
         ),

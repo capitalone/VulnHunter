@@ -1,11 +1,19 @@
-import pytest
 import runpy
-from vulnhunter.app import main
+from vulnhunter import app
 
-def test_main(capsys):
-    main()
+
+def test_main_help(capsys):
+    try:
+        app.main(["--help"])
+    except SystemExit as exc:
+        assert exc.code == 0
     captured = capsys.readouterr()
-    assert captured.out.strip() == "Hello, Python Project!"
+    assert "Provider-neutral, multi-model security scanner" in captured.out
 
-def test_main_execution():
-    runpy.run_module('vulnhunter.app', run_name='__main__')
+
+def test_main_execution(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["vulnhunter", "--help"])
+    try:
+        runpy.run_module("vulnhunter.app", run_name="__main__")
+    except SystemExit as exc:
+        assert exc.code == 0

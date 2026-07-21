@@ -4,6 +4,173 @@
 
 VulnHunter is an open-source, **agentic AI security tool** that applies proactive, attacker-first analysis directly to source code. 
 
+> [!NOTE]
+> **About this fork:** This repository is **Multi-VulnHunter**, an independent
+> fork of [Capital One's original VulnHunter](https://github.com/capitalone/VulnHunter).
+> Capital One created the original project and security methodology. This fork
+> retains the **VulnHunter** application name, `vulnhunter` CLI command, legacy
+> skill names, and Apache 2.0 license; it is not presented as an official
+> Capital One release.
+
+## What Multi-VulnHunter adds
+
+This fork preserves the original Claude-oriented workflows and adds a
+provider-neutral scanning engine that can:
+
+- run directly from a terminal or CI job without Claude Code;
+- use Anthropic, OpenAI, OpenRouter, Ollama, Codex CLI authentication, Gemini,
+  or OpenAI-compatible local runtimes;
+- run multiple independent generalist models side-by-side, union their
+  candidates, and have isolated reviewers check one another's work;
+- add optional specialists without replacing broad generalist coverage;
+- select Quick, Standard, Deep, or Exhaustive scan rigor independently from
+  the number of core models;
+- track provider usage, caching, costs, rate limits, incomplete coverage, and
+  resumable checkpoints; and
+- integrate with Codex, Claude Code, OpenCode, Pi, or another coding tool
+  through the root `SKILL.md` and the same universal CLI.
+
+## Provider-neutral scanner
+
+VulnHunter now includes a standalone, multi-model scanner in
+`vulnhunter-agent/`. It does not require Claude Code and can be called from a
+terminal, CI job, OpenCode, Pi, Codex, Claude Code, or any coding tool that can
+run a command and read JSON.
+
+Supported model paths include:
+
+- Anthropic, OpenAI, and Gemini;
+- OpenRouter;
+- native Ollama;
+- OpenAI-compatible local servers such as vLLM, llama.cpp, LM Studio, and
+  LocalAI.
+
+## Fastest setup: skill import or CLI
+
+There is no single natural-language import phrase guaranteed by every coding
+tool. Tools that support repository/Agent Skill imports can use the root
+[`SKILL.md`](SKILL.md). For example, tell Pi, Claude Code, Codex, OpenCode, or a
+similar agent:
+
+> Install `https://github.com/JJsilvera1/Multi-VulnHunter` as an Agent Skill. Use the
+> root `SKILL.md`, then follow the provider setup in the repository README. Do
+> not select a remote provider without showing me the source-exposure notice.
+
+If that tool supports GitHub skill imports, it can clone the repository and
+discover the root skill. If it does not, use the universal CLI path below; the
+coding tool only needs to run the command, wait, and read `run_manifest.json`.
+
+```bash
+python -m pip install \
+  "git+https://github.com/JJsilvera1/Multi-VulnHunter.git#subdirectory=vulnhunter-agent"
+
+vulnhunter init
+vulnhunter doctor
+vulnhunter scan .
+```
+
+To see every CLI command or detailed help for one command:
+
+```bash
+vulnhunter help
+vulnhunter help scan
+# Standard argparse forms also work:
+vulnhunter --help
+vulnhunter scan --help
+```
+
+During `init`, VulnHunter queries each configured provider's current model list.
+The model browser supports numbered selection, `/text` filtering, and
+next/previous pages, and shows each provider-reported context-window size.
+Models whose provider does not publish a limit are labeled `unknown`.
+Context is compacted (`131k`, `1M`) and available pricing is normalized as
+`$.05/M in - $1/M out`; missing price metadata is labeled `pricing unknown`.
+For OpenRouter, three zero-cost models are pinned at the top and marked `FREE`.
+The picker explains that free-model limits are normally 50 requests/day or up
+to 1,000/day for eligible funded accounts; OpenRouter does not currently expose
+a reliable free-request-remaining counter. Available key spend/usage is shown
+separately so it is not confused with request quota.
+Provider-reported input-cache support and cache-read pricing are shown beside
+each model. Scan output and manifests track API requests, rate-limit retries,
+cached input tokens, cache writes, and actual or estimated API cost.
+When every core hunter is a free remote model, VulnHunter automatically enters
+free-team pacing: assignments run serially and calls are spaced by at least 3.2
+seconds to stay below OpenRouter's documented 20 requests/minute. A `429`
+honors `Retry-After` and adds bounded exponential backoff with jitter. The CLI
+warns that this mode is intentionally slower.
+Interactive terminals color model identities cyan, context yellow, and pricing
+green. Control this globally with `vulnhunter --color auto|always|never ...`,
+or set the standard `NO_COLOR` environment variable.
+During a scan, blue marks active phases, green marks completed work, yellow
+marks warnings or resumed/incomplete work, red marks failures, and magenta
+marks review/candidate activity. Progress remains line-oriented and includes
+text and symbols so meaning never depends on color alone.
+
+For detailed live diagnostics and a log that can be tailed from another
+PowerShell window:
+
+```powershell
+vulnhunter scan . --verbose --log-file .\vulnhunter-progress.jsonl
+Get-Content .\vulnhunter-progress.jsonl -Wait
+```
+
+Provider calls emit a heartbeat every 15 seconds. Each completed response
+updates observed API spend, token totals, elapsed time, and a live adaptive
+estimate. The compact status line groups elapsed time with ETA, spend with its
+estimated total, and cumulative provider responses with tool calls. The initial
+forecast uses repository partitions, expected assignments,
+and estimated agent/tool turns; its confidence is explicitly low until real
+provider usage arrives. Use `--max-cost-usd` when a hard stop matters.
+The cap stops new assignment scheduling; an already-running multi-turn
+assignment can finish slightly above it.
+After the first selection it offers to add a second,
+third, or further core model. The complete roster is saved locally and shown
+by provider/model identity on the scan's model-count screen. Run
+`vulnhunter models` to change or extend it later, or choose `m` from the scan.
+
+### Provider credentials
+
+VulnHunter never writes API keys into its TOML configuration. Export provider
+variables normally, or copy
+[`providers.env.example`](vulnhunter-agent/providers.env.example) to
+`~/.vulnhunter/providers.env`. That dedicated file is loaded automatically;
+repository `.env` files are deliberately not loaded because they may contain
+unrelated application secrets.
+
+```bash
+mkdir -p ~/.vulnhunter
+vulnhunter env-example --write ~/.vulnhunter/providers.env
+# Edit the file and set only the providers you want to use.
+vulnhunter init
+```
+
+You can instead supply a particular file with `--env-file /secure/path/providers.env`.
+Recognized credentials are `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, and `GEMINI_API_KEY`. Ollama and unauthenticated local servers
+need no key.
+
+Gemini's OpenAI-compatible API is supported directly. Google Cloud OAuth/ADC is
+supported for a Vertex OpenAI-compatible endpoint through a refreshable
+`credential_command`; see
+[`config.multi.example.toml`](vulnhunter-agent/config.multi.example.toml).
+OpenAI's public API uses `OPENAI_API_KEY`. As a separate option, an installed
+Codex CLI authenticated with `codex login` can be selected as a provider.
+VulnHunter invokes ephemeral, read-only `codex exec` assignments and lets Codex
+own OAuth storage and refresh; it never reads or copies `~/.codex/auth.json`.
+
+Reasoning-capable models expose an `auto` or explicit thinking-effort selector
+in `vulnhunter models`. OpenRouter choices come from its live model metadata;
+Codex choices come from the current Codex-maintained model catalog. Interactive
+incomplete scans offer to resume failed work from the checkpoint without
+rerunning completed assignments. Automation can use `--retry-incomplete` for
+one bounded retry.
+
+An interactive scan asks only two questions: the scan level and number of core
+models. Core models hunt independently as unrestricted generalists before they
+see one another's work. Optional specialists supplement that coverage; they
+never replace it. See [`vulnhunter-agent/README.md`](vulnhunter-agent/README.md)
+for configuration, tiers, safety controls, and automation examples.
+
 Unlike traditional, passive SAST scanners that flag suspicious patterns and often cause false positives, VulnHunter reasons like an adversary. It **identifies** which defects are actually exploitable, maps prospective attack paths, and proposes targeted, evidence-backed fixes.
 
 Modern software supply chains are deeply interconnected. A single vulnerability in a widely-used open-source component can ripple across thousands of enterprises simultaneously.
@@ -20,8 +187,10 @@ Developed internally at Capital One, VulnHunter is released to the community bec
 
 > [!IMPORTANT]
 > **Prerequisites & Model Requirements**
-> Built and optimized for **Claude Opus** running in **[Claude Code](https://docs.claude.com/en/docs/claude-code)**. 
-> The framework depends on deep, multi-step reasoning and requires frontier Opus-class models. **You supply your own model access.**
+> The legacy prompt-only workflow was optimized for **Claude Opus** in
+> **[Claude Code](https://docs.claude.com/en/docs/claude-code)**. The standalone
+> scanner is provider-neutral, but security-review quality still depends heavily
+> on the selected models. **You supply your own model access.**
 
 ---
 
@@ -55,6 +224,7 @@ Each component is organized into a self-contained subtree:
 
 | Path | Description |
 | :--- | :--- |
+| `SKILL.md` | Universal provider-neutral skill entry point for coding tools that can import Agent Skills. |
 | `vulnhunt/` | The core `/vulnhunt` scanner skill (Prompt-only: `SKILL.md` + phases). See [`vulnhunt/README.md`](vulnhunt/README.md). |
 | `vulnhunter-fix/` | The `/vulnhunter-fix` skill, its companion Python helper package, and tests. See [`vulnhunter-fix/README.md`](vulnhunter-fix/README.md). |
 | `vulnhunt-fix-verify/` | The `/vulnhunt-fix-verify` standalone verification skill (Prompt-only). See [`vulnhunt-fix-verify/README.md`](vulnhunt-fix-verify/README.md). |
@@ -66,18 +236,28 @@ Each component is organized into a self-contained subtree:
 ## Requirements & Setup
 
 ### Prerequisites
-* [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), authenticated with access to **Claude Opus**.
-* Python 3.12+ (Required only for the runtime agent and the benchmarking harness).
+* Python 3.12+ for the provider-neutral CLI.
+* Claude Code with Claude Opus only when using the legacy prompt-only workflow.
 * *Responsibility Check:* Ensure you are only scanning code bases you are explicitly authorized to analyze.
 
 ### Installation
 
+Provider-neutral CLI from GitHub:
+
+```bash
+python -m pip install \
+  "git+https://github.com/JJsilvera1/Multi-VulnHunter.git#subdirectory=vulnhunter-agent"
+vulnhunter init
+```
+
+For editable development or the legacy Claude skills:
+
 ```bash
 # Clone the repository
-git clone https://github.com/capitalone/vulnhunter.git
-cd vulnhunter
+git clone https://github.com/JJsilvera1/Multi-VulnHunter.git
+cd Multi-VulnHunter
 
-# Copy skills into ~/.claude/skills/
+# Copy the legacy skills into ~/.claude/skills/
 ./install.sh      
 
 # (Optional) To clean up or remove installed skills
@@ -126,7 +306,10 @@ claude --model opus --add-dir ~/.claude/skills/vulnhunt-fix-verify \
 ## Automation & Scale
 
 ### Headless Runtime Agent (`vulnhunter-agent/`)
-For non-interactive or CI/CD pipelines, `vulnhunter-agent/` wraps the scanner into a headless workflow. It clones targets, executes `/vulnhunt`, publishes results, and opens GitHub issues for confirmed bugs. It connects natively via the direct Anthropic API. 
+For non-interactive or CI/CD pipelines, `vulnhunter-agent/` provides the
+provider-neutral `vulnhunter` CLI as well as the transition-period legacy
+Claude workflow. The native CLI emits compatible report and manifest artifacts;
+the legacy agent retains its existing publishing and GitHub issue paths.
 
 Review the [`vulnhunter-agent/README.md`](vulnhunter-agent/README.md) for deployment blueprints.
 

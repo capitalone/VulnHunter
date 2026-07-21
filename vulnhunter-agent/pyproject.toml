@@ -5,10 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "c1-vulnhunter-agent"
 dynamic = ["version"]
-description = "VulnHunter runtime agent: drives the /vulnhunt Claude Code skill, publishes results, and files findings as GitHub issues."
+description = "Provider-neutral, multi-model VulnHunter scanner with legacy Claude workflow compatibility."
 requires-python = ">=3.12"
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 dependencies = [
     "claude-agent-sdk",
     "httpx",
@@ -17,15 +17,21 @@ dependencies = [
     "certifi",
 ]
 
+[project.scripts]
+vulnhunter = "vulnhunter.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest", "pytest-cov", "pytest-asyncio", "syrupy", "respx", "hypothesis", "anyio"]
 
 [project.urls]
-homepage = "https://github.com/capitalone/vulnhunter"
+homepage = "https://github.com/JJsilvera1/Multi-VulnHunter"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["agent*", "vulnhunter*"]
+
+[tool.setuptools.package-data]
+vulnhunter = ["schemas/*.json"]
 
 [tool.setuptools.dynamic]
 version = { attr = "vulnhunter.__version__" }

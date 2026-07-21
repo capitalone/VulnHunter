@@ -63,8 +63,9 @@ def captured_runs(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     def fake_run(cmd: list[str], **kwargs: Any) -> _FakeCompleted:
         calls.append({"cmd": cmd, "kwargs": kwargs})
         # Create the target directory so the clone is treated as success.
-        target = Path(cmd[-1])
-        target.mkdir(parents=True, exist_ok=True)
+        if len(cmd) > 1 and cmd[1] == "clone":
+            target = Path(cmd[-1])
+            target.mkdir(parents=True, exist_ok=True)
         return _FakeCompleted(returncode=0)
 
     monkeypatch.setattr(clone_mod, "_GIT_EXECUTABLE", "git")

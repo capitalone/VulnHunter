@@ -13,6 +13,33 @@ trigger:
 
 # VulnHunter Security Audit Skill
 
+## Provider-neutral engine compatibility
+
+Unless the invocation explicitly includes `engine=legacy`, do not execute the
+legacy phase orchestration below. The standalone `vulnhunter` CLI is the
+authoritative scanner. `engine=legacy` remains available for the transition
+release.
+
+1. Resolve the target directory exactly as the legacy path would.
+2. If `level=` is absent, ask one menu question for Quick, Standard, Deep, or
+   Exhaustive.
+3. If `models=` is absent, ask one menu question for the number of core models.
+   These are the only two scan questions.
+4. Use Bash only to launch the trusted installed scanner:
+
+   `vulnhunter scan <target> --level <level> --models <count> --yes`
+
+5. Wait for it to exit, read the printed `run_manifest.json` and `README.md`,
+   and summarize their status. Never describe `COMPLETE_CONDITIONAL`,
+   `INCOMPLETE_LIMIT`, or `INCOMPLETE_COVERAGE` as clean.
+
+If Bash or the `vulnhunter` executable is unavailable, stop and tell the user
+to install `vulnhunter-agent` and run `vulnhunter init`; do not fall back
+silently to a remote provider or to the legacy engine.
+
+Only continue into the Claude-specific instructions below when the invocation
+explicitly selected `engine=legacy`.
+
 ## MANDATORY FIRST ACTIONS
 
 **Step 0: Model check (interactive/direct invocation only).** When invoked

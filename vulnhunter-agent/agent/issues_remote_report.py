@@ -150,7 +150,7 @@ def download_latest_report(
             )
 
         newest = max(candidates, key=lambda p: p.name)
-        rel_path_in_dest = str(newest.relative_to(workdir))
+        rel_path_in_dest = newest.relative_to(workdir).as_posix()
 
         logger.info(
             "Downloaded latest report for %s/%s: %s",
@@ -269,7 +269,7 @@ def download_named_report(
                 "README.md — not a valid VulnHunter results directory."
             )
 
-        rel_path_in_dest = str(match.relative_to(workdir))
+        rel_path_in_dest = match.relative_to(workdir).as_posix()
         logger.info(
             "Downloaded named report for %s/%s: %s",
             source_owner,

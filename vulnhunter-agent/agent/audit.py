@@ -175,9 +175,18 @@ class AuditPaths:
     @classmethod
     def from_config(cls, events_path: str, findings_path: str) -> "AuditPaths":
         return cls(
-            events=Path(events_path).expanduser().resolve(),
-            findings=Path(findings_path).expanduser().resolve(),
+            events=_expand_config_path(events_path),
+            findings=_expand_config_path(findings_path),
         )
+
+
+def _expand_config_path(value: str) -> Path:
+    """Expand ``~`` using HOME consistently on POSIX and Windows."""
+    home = os.environ.get("HOME")
+    if home and (value == "~" or value.startswith("~/") or value.startswith("~\\")):
+        suffix = value[2:] if len(value) > 1 else ""
+        return (Path(home) / suffix).resolve()
+    return Path(value).expanduser().resolve()
 
 
 class AuditWriter:

@@ -4,6 +4,7 @@ __pycache__/
 
 # Environments
 .env
+providers.env
 .venv
 env/
 venv/
@@ -50,6 +51,7 @@ clones/
 # Agent runtime artifacts
 verify_runs/
 config.toml
+config.models.json
 
 # vulnhunter-fix runtime/work dirs (generated locally, never committed)
 work/

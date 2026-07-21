@@ -139,15 +139,16 @@ def build_kickoff_prompt(
         "/vulnhunt-fix-verify",
         "",
         "Arguments:",
-        f"  repo:     {repo}",
-        f"  report:   {report}",
+        f"  repo:     {repo.as_posix()}",
+        f"  report:   {report.as_posix()}",
         f"  fixed:    {fixed_value}",
-        f"  out:      {out}",
-        f"  comments: {comments}",
+        f"  out:      {out.as_posix()}",
+        f"  comments: {comments.as_posix()}",
     ]
     if additional_repos:
         lines.append(
-            "  additional_repos: " + ",".join(str(p) for p in additional_repos)
+            "  additional_repos: "
+            + ",".join(p.as_posix() for p in additional_repos)
         )
     lines.append("")
     return "\n".join(lines)

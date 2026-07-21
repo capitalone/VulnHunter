@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/capitalone/vulnhunter/run_manifest.schema.json",
+  "title": "Provider-neutral VulnHunter run manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "status",
+    "repository",
+    "level",
+    "models",
+    "specialists",
+    "usage",
+    "limits",
+    "coverage",
+    "assignments",
+    "findings",
+    "reviews",
+    "incomplete_reason"
+  ],
+  "properties": {
+    "schema_version": {"const": "1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "status": {
+      "enum": [
+        "RUNNING",
+        "COMPLETE_CLEAN",
+        "COMPLETE_FINDINGS",
+        "COMPLETE_CONDITIONAL",
+        "INCOMPLETE_LIMIT",
+        "INCOMPLETE_COVERAGE",
+        "FAILED"
+      ]
+    },
+    "repository": {"type": "object"},
+    "level": {"enum": ["quick", "standard", "deep", "exhaustive"]},
+    "models": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+    "specialists": {"type": "array", "items": {"type": "object"}},
+    "usage": {"type": "object"},
+    "limits": {"type": "object"},
+    "coverage": {"type": "object"},
+    "assignments": {
+      "type": "object",
+      "required": ["total", "completed", "failed", "pending"],
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "completed": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "pending": {"type": "integer", "minimum": 0}
+      }
+    },
+    "findings": {"type": "array", "items": {"type": "object"}},
+    "reviews": {"type": "integer", "minimum": 0},
+    "incomplete_reason": {"type": "string"}
+  }
+}

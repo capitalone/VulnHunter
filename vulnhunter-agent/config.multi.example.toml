@@ -1,0 +1,158 @@
+# Provider-neutral VulnHunter example.
+# Secrets stay in environment variables; never paste API keys into this file.
+
+[providers.anthropic]
+kind = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+remote = true
+
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+remote = true
+
+[providers.gemini]
+kind = "gemini"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+api_key_env = "GEMINI_API_KEY"
+remote = true
+
+[providers.openrouter]
+kind = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+remote = true
+
+[providers.openrouter.headers]
+HTTP-Referer = "https://github.com/JJsilvera1/Multi-VulnHunter"
+X-Title = "VulnHunter"
+
+# Optional: reuse an authenticated Codex CLI session. Run `codex login` first.
+# Codex owns and refreshes its ChatGPT OAuth credentials; VulnHunter never reads
+# ~/.codex/auth.json. Assignments execute as ephemeral, read-only Codex runs.
+[providers.codex-cli]
+kind = "codex_cli"
+base_url = ""
+remote = true
+
+[providers.ollama]
+kind = "ollama"
+base_url = "http://127.0.0.1:11434"
+remote = false
+
+# This one adapter covers vLLM, llama.cpp servers, LM Studio, LocalAI, and
+# compatible gateways. Change the URL and model below for your runtime.
+[providers.local-compatible]
+kind = "openai_compatible"
+base_url = "http://127.0.0.1:8000/v1"
+api_key_env = "VULNHUNTER_OPENAI_COMPATIBLE_API_KEY"
+remote = false
+
+[models.local-coder]
+provider = "ollama"
+model = "qwen3-coder:latest"
+remote = false
+priority = 10
+tool_mode = "native"
+context_tokens = 131072
+max_output_tokens = 8192
+
+[models.local-compatible-coder]
+provider = "local-compatible"
+model = "local-coder"
+remote = false
+priority = 20
+tool_mode = "json"
+context_tokens = 131072
+max_output_tokens = 8192
+
+[models.openrouter-security]
+provider = "openrouter"
+model = "openrouter/auto"
+remote = true
+priority = 30
+tool_mode = "native"
+context_tokens = 128000
+max_output_tokens = 8192
+# `auto` leaves the provider/model default unchanged. `vulnhunter models`
+# queries OpenRouter for the effort levels actually exposed by each model.
+reasoning_effort = "auto"
+# Required before using --max-cost-usd:
+# input_cost_per_million = 1.0
+# output_cost_per_million = 4.0
+
+[models.anthropic-primary]
+provider = "anthropic"
+model = "claude-opus-4-8"
+remote = true
+priority = 40
+tool_mode = "native"
+context_tokens = 200000
+max_output_tokens = 8192
+# input_cost_per_million = 0.0
+# output_cost_per_million = 0.0
+
+[models.codex-oauth]
+provider = "codex-cli"
+model = "gpt-5.6-sol"
+remote = true
+priority = 35
+tool_mode = "native"
+context_tokens = 272000
+max_output_tokens = 8192
+reasoning_effort = "auto"
+supported_reasoning_efforts = ["low", "medium", "high", "xhigh", "max", "ultra"]
+billing_label = "ChatGPT/Codex plan"
+
+[models.openai-primary]
+provider = "openai"
+model = "gpt-5"
+remote = true
+priority = 50
+tool_mode = "native"
+context_tokens = 128000
+max_output_tokens = 8192
+# input_cost_per_million = 0.0
+# output_cost_per_million = 0.0
+
+[models.gemini-primary]
+provider = "gemini"
+model = "gemini-3.5-flash"
+remote = true
+priority = 60
+tool_mode = "native"
+context_tokens = 1048576
+max_output_tokens = 8192
+# input_cost_per_million = 0.0
+# output_cost_per_million = 0.0
+
+# Google Cloud OAuth / ADC example. Replace PROJECT_ID before enabling.
+# The credential helper is executed without a shell and cached for 45 minutes.
+# [providers.vertex-gemini]
+# kind = "openai_compatible"
+# base_url = "https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/endpoints/openapi"
+# credential_command = ["gcloud", "auth", "application-default", "print-access-token"]
+# remote = true
+#
+# [models.vertex-gemini]
+# provider = "vertex-gemini"
+# model = "google/gemini-3.5-flash"
+# remote = true
+# priority = 70
+# tool_mode = "native"
+
+[specialists.crypto]
+model = "local-coder"
+enabled = false
+prompt = "Perform a supplemental cryptography, key handling, entropy, and trust-chain audit."
+
+[specialists.cloud-iam]
+model = "openrouter-security"
+enabled = false
+prompt = "Perform a supplemental cloud IAM, credential scope, and confused-deputy audit."
+
+[sandbox]
+# Must invoke a real sandbox wrapper before --execute is accepted.
+command_prefix = []

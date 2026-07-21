@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/capitalone/vulnhunter/candidate.schema.json",
+  "title": "VulnHunter normalized candidate",
+  "type": "object",
+  "required": [
+    "candidate_id", "title", "classification", "severity", "cwe",
+    "source", "sink", "trace", "root_cause", "attacker_prerequisites",
+    "new_capability", "contradicting_evidence", "fix_strategy",
+    "discovered_by", "verdict", "reviews"
+  ],
+  "properties": {
+    "candidate_id": {"type": "string", "pattern": "^CAND-[0-9]{5}$"},
+    "title": {"type": "string", "minLength": 1},
+    "classification": {"type": "string"},
+    "severity": {"enum": ["Critical", "High", "Medium", "Low"]},
+    "cwe": {"type": "string"},
+    "source": {"type": "object"},
+    "sink": {"type": "object"},
+    "trace": {"type": "array", "items": {"type": "object"}},
+    "root_cause": {"type": "string"},
+    "attacker_prerequisites": {"type": "array", "items": {"type": "string"}},
+    "new_capability": {"type": "string"},
+    "contradicting_evidence": {"type": "array", "items": {"type": "string"}},
+    "fix_strategy": {"type": "string"},
+    "discovered_by": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+    "verdict": {"enum": ["CONFIRMED", "REJECTED", "CONDITIONAL", "UNRESOLVED"]},
+    "reviews": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": true
+}

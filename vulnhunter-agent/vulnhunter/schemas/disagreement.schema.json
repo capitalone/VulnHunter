@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/capitalone/vulnhunter/disagreement.schema.json",
+  "title": "VulnHunter review disagreement",
+  "type": "object",
+  "required": ["candidate_id", "review_ids", "disputed_claims", "resolution_status"],
+  "properties": {
+    "candidate_id": {"type": "string", "pattern": "^CAND-[0-9]{5}$"},
+    "review_ids": {"type": "array", "minItems": 2, "items": {"type": "string"}},
+    "disputed_claims": {"type": "array", "items": {"type": "string"}},
+    "resolution_status": {
+      "enum": ["PENDING", "CONFIRMED", "REJECTED", "CONDITIONAL", "UNRESOLVED"]
+    }
+  },
+  "additionalProperties": false
+}

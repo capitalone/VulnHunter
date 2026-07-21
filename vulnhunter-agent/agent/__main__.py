@@ -58,7 +58,7 @@ from . import repo_properties as repo_props
 from ._github import api_base
 from .auth import make_token_manager, resolve_verify
 from .clone import shallow_clone
-from .config import AgentConfig, AuditConfig, load_config
+from .config import AgentConfig, load_config
 from .issues_remote_report import (
     DownloadedReport,
     RemoteReportError,
@@ -74,7 +74,6 @@ from .runner import (
 )
 from ._stream_events import SessionTotals
 from .issues import PostSummary
-from .issues_extract import Finding
 from .manifest import write_manifest
 from .token_client import GitHubRole, get_github_token
 
@@ -142,6 +141,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "--scan-id",
         default="",
         help="Optional identifier embedded in OTEL resource attributes",
+    )
+    scan_section.add_argument(
+        "--engine",
+        choices=("legacy", "native"),
+        default="legacy",
+        help=(
+            "Scanner engine. 'legacy' runs the Claude Code skill (default); "
+            "'native' delegates to the provider-neutral vulnhunter CLI."
+        ),
+    )
+    scan_section.add_argument(
+        "--native-level",
+        choices=("quick", "standard", "deep", "exhaustive"),
+        default="quick",
+        help="Provider-neutral scan level when --engine=native.",
+    )
+    scan_section.add_argument(
+        "--native-models",
+        type=int,
+        default=1,
+        help="Number of provider-neutral core models when --engine=native.",
     )
 
     scan_group = scan_section.add_mutually_exclusive_group()
@@ -1284,11 +1304,39 @@ def main(argv: list[str] | None = None) -> int:
             scan_only_flags.append("--read-only/--no-read-only")
         if args.enable_bash:
             scan_only_flags.append("--enable-bash")
+        if args.engine != "legacy":
+            scan_only_flags.append("--engine")
+        if args.native_level != "quick":
+            scan_only_flags.append("--native-level")
+        if args.native_models != 1:
+            scan_only_flags.append("--native-models")
         if scan_only_flags:
             parser.error(
                 "These flags are scan-mode only and cannot be used with "
                 "--mode=verify: " + ", ".join(scan_only_flags)
             )
+
+    if args.mode == "scan" and args.engine == "native":
+        if args.publish is not False or args.issues is not False:
+            parser.error(
+                "--engine=native currently requires --no-publish --no-issues; "
+                "the generated legacy report and manifest remain compatible with "
+                "the existing downstream publishing commands."
+            )
+        from vulnhunter.cli import main as native_main
+
+        native_argv = [
+            "scan",
+            args.targets[0],
+            "--level",
+            args.native_level,
+            "--models",
+            str(args.native_models),
+            "--yes",
+        ]
+        if args.config:
+            native_argv.extend(["--config", args.config])
+        return native_main(native_argv)
 
     _configure_logging(args.log_level, args.verbose)
     set_verbosity(args.verbose)

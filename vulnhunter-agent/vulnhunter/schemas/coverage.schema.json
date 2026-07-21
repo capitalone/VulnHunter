@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/capitalone/vulnhunter/coverage.schema.json",
+  "title": "VulnHunter coverage summary",
+  "type": "object",
+  "required": [
+    "files_total",
+    "files_reviewed",
+    "unresolved_files",
+    "assignment_coverage",
+    "unfinished_assignments",
+    "complete"
+  ],
+  "properties": {
+    "files_total": {"type": "integer", "minimum": 0},
+    "files_reviewed": {"type": "array", "items": {"type": "string"}},
+    "unresolved_files": {"type": "array", "items": {"type": "string"}},
+    "assignment_coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "assignment_id",
+          "model_alias",
+          "kind",
+          "files_assigned",
+          "files_reviewed",
+          "unresolved_files",
+          "status"
+        ],
+        "properties": {
+          "assignment_id": {"type": "string"},
+          "model_alias": {"type": "string"},
+          "kind": {"type": "string"},
+          "files_assigned": {"type": "array", "items": {"type": "string"}},
+          "files_reviewed": {"type": "array", "items": {"type": "string"}},
+          "unresolved_files": {"type": "array", "items": {"type": "string"}},
+          "status": {"enum": ["PENDING", "COMPLETED", "FAILED"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "unfinished_assignments": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "complete": {"type": "boolean"}
+  },
+  "additionalProperties": false
+}
