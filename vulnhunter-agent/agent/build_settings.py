@@ -1,9 +1,11 @@
 """Build the Claude Code settings JSON the SDK passes through to the CLI.
 
-Routes Anthropic calls either directly to the Anthropic API (``api_key``
-mode) or through an AWS Bedrock proxy fronted by an OAuth bearer token
-(``bedrock_oauth`` mode), blanks out inherited HTTP proxies, applies an
-OS-level sandbox, and (optionally) enables OTLP telemetry.
+Routes Anthropic calls one of three ways: directly to the Anthropic API
+(``api_key`` mode), through an AWS Bedrock proxy fronted by an OAuth bearer
+token (``bedrock_oauth`` mode), or directly to Amazon Bedrock with SigV4
+request signing via the standard AWS credential chain (``bedrock_sigv4``
+mode). It also blanks out inherited HTTP proxies, applies an OS-level
+sandbox, and (optionally) enables OTLP telemetry.
 """
 
 from __future__ import annotations
@@ -45,12 +47,39 @@ def _anthropic_host(cfg: AgentConfig) -> str:
     """The network host the SDK talks to, for the sandbox allow-list."""
     if cfg.anthropic.auth_mode == "bedrock_oauth":
         return urlparse(cfg.anthropic.bedrock_base_url).hostname or ""
+    if cfg.anthropic.auth_mode == "bedrock_sigv4":
+        # Explicit base URL (VPC/custom endpoint) wins; otherwise the
+        # regional Bedrock runtime endpoint the CLI will call by default.
+        if cfg.anthropic.bedrock_base_url:
+            return urlparse(cfg.anthropic.bedrock_base_url).hostname or ""
+        region = cfg.anthropic.aws_region.strip()
+        return f"bedrock-runtime.{region}.amazonaws.com" if region else ""
     return "api.anthropic.com"
 
 
-def _build_sandbox(cfg: AgentConfig) -> dict:
+def _sandbox_allowed_domains(cfg: AgentConfig) -> list[str]:
+    """Hosts the sandboxed CLI is allowed to reach.
+
+    Always the Anthropic/Bedrock inference host. In ``bedrock_sigv4`` mode the
+    CLI also signs with the AWS credential chain, which for assume-role / SSO
+    credentials calls regional STS — so we add the regional STS endpoint too.
+    (Static-key credentials need no extra host; IMDS/instance-role uses the
+    link-local 169.254.169.254 address, and full SSO login flows may need
+    additional endpoints — for those, widen this list or disable the sandbox.)
+    """
     host = _anthropic_host(cfg)
-    allowed_domains = [host] if host else []
+    domains = [host] if host else []
+    if cfg.anthropic.auth_mode == "bedrock_sigv4":
+        region = cfg.anthropic.aws_region.strip()
+        if region:
+            sts = f"sts.{region}.amazonaws.com"
+            if sts not in domains:
+                domains.append(sts)
+    return domains
+
+
+def _build_sandbox(cfg: AgentConfig) -> dict:
+    allowed_domains = _sandbox_allowed_domains(cfg)
     return {
         "enabled": cfg.sandbox.enabled,
         "failIfUnavailable": cfg.sandbox.fail_if_unavailable,
@@ -104,6 +133,30 @@ def build_claude_settings(
                 "ENABLE_PROMPT_CACHING_1H_BEDROCK": "1",
             }
         )
+    elif cfg.anthropic.auth_mode == "bedrock_sigv4":
+        # Direct Amazon Bedrock with SigV4 signing. Crucially we set
+        # CLAUDE_CODE_USE_BEDROCK=1 but DELIBERATELY omit both
+        # CLAUDE_CODE_SKIP_BEDROCK_AUTH and ANTHROPIC_AUTH_TOKEN — their
+        # absence is what makes the bundled CLI sign requests with the AWS
+        # credential chain (env vars, shared config/credentials, SSO,
+        # container/instance role) instead of forwarding a bearer token to
+        # a proxy. auth_token is empty in this mode (SigV4TokenManager).
+        env.update(
+            {
+                "CLAUDE_CODE_USE_BEDROCK": "1",
+                "AWS_REGION": cfg.anthropic.aws_region,
+                # Same 1-hour cache-TTL rationale as bedrock_oauth.
+                "ENABLE_PROMPT_CACHING_1H_BEDROCK": "1",
+            }
+        )
+        # Optional explicit endpoint (VPC / custom Bedrock endpoint). Blank →
+        # the CLI derives the regional bedrock-runtime endpoint from AWS_REGION.
+        if cfg.anthropic.bedrock_base_url:
+            env["ANTHROPIC_BEDROCK_BASE_URL"] = cfg.anthropic.bedrock_base_url
+        # Optional named profile from the shared AWS config/credentials file.
+        # Blank → default credential chain.
+        if cfg.anthropic.aws_profile:
+            env["AWS_PROFILE"] = cfg.anthropic.aws_profile
     else:
         # Direct Anthropic API. The API key rides in as auth_token (from the
         # token provider) or falls back to the configured value.

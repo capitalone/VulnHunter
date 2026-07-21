@@ -22,6 +22,14 @@
 #   "bedrock_oauth" — route through an AWS Bedrock proxy fronted by an OAuth2
 #                     client-credentials endpoint. Requires bedrock_base_url
 #                     and the [oauth] block.
+#   "bedrock_sigv4" — call Amazon Bedrock directly with SigV4 request signing
+#                     via the standard AWS credential chain (env vars, shared
+#                     config/credentials file, SSO, container/instance role).
+#                     No proxy, no bearer token, no [oauth] block. Requires
+#                     aws_region; bedrock_base_url is optional (blank → the
+#                     regional bedrock-runtime endpoint). Set aws_profile to
+#                     pick a named profile. Use cross-region inference-profile
+#                     model IDs as the model (e.g. "us.anthropic.claude-...").
 auth_mode = "api_key"
 api_key = ""
 # Default model. Override per-invocation with --model.
@@ -29,8 +37,12 @@ model = "claude-opus-4-8"
 
 # --- bedrock_oauth mode only (leave blank for api_key mode) ---
 # Base URL of the proxy that fronts Bedrock-hosted Claude.
+# --- bedrock_sigv4 mode: leave bedrock_base_url blank for the regional
+#     endpoint, or set it for a VPC/custom Bedrock endpoint. ---
 bedrock_base_url = ""
 aws_region = "us-east-1"
+# bedrock_sigv4 mode only: optional named AWS profile. Blank → default chain.
+aws_profile = ""
 
 [oauth]
 # bedrock_oauth mode only: OAuth2 client-credentials endpoint that mints the
