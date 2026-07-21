@@ -189,6 +189,64 @@ def test_init_reuses_existing_config_without_force(
     assert "Using existing VulnHunter config" in capsys.readouterr().out
 
 
+def test_init_opens_new_codex_provider_picker_directly(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[providers.openrouter]\n"
+        'kind = "openrouter"\n'
+        'base_url = "https://openrouter.test/v1"\n'
+        "remote = true\n\n"
+        "[models.openrouter]\n"
+        'provider = "openrouter"\n'
+        'model = "vendor/model"\n'
+        "remote = true\n",
+        encoding="utf-8",
+    )
+    picker_filters: list[str | None] = []
+
+    monkeypatch.setattr(
+        "vulnhunter.cli.discover_codex_cli",
+        lambda: {
+            "model": "gpt-test",
+            "context_tokens": 200_000,
+            "supported_reasoning_efforts": ["low", "medium", "high"],
+        },
+    )
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+
+    async def configure(
+        _config,
+        *,
+        provider_filter=None,
+        discovered=None,
+        offer_additional_models=True,
+    ):
+        del discovered
+        picker_filters.append(
+            f"{provider_filter}:{offer_additional_models}"
+        )
+
+    async def healthy(_config, *, probe_models=True):
+        del probe_models
+        return []
+
+    monkeypatch.setattr(
+        "vulnhunter.cli._configure_models_interactively", configure
+    )
+    monkeypatch.setattr("vulnhunter.cli.doctor", healthy)
+
+    assert main(["init", "--config", str(config_path)]) == 0
+
+    output = capsys.readouterr().out
+    assert picker_filters == ["codex-cli:False"]
+    assert "separate provider" in output
+    assert "will not appear in OpenRouter searches" in output
+    assert "[providers.codex-cli]" in config_path.read_text(encoding="utf-8")
+
+
 def test_help_lists_commands_and_examples(capsys) -> None:
     assert main(["help"]) == 0
 

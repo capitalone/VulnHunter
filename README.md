@@ -157,6 +157,12 @@ OpenAI's public API uses `OPENAI_API_KEY`. As a separate option, an installed
 Codex CLI authenticated with `codex login` can be selected as a provider.
 VulnHunter invokes ephemeral, read-only `codex exec` assignments and lets Codex
 own OAuth storage and refresh; it never reads or copies `~/.codex/auth.json`.
+Codex CLI is a separate provider, so its models do not appear when filtering
+the OpenRouter catalog. When it is added to an existing configuration, setup
+opens the Codex picker directly. Reopen that catalog later with
+`vulnhunter models --provider codex-cli`. To run only the saved Codex model,
+use `vulnhunter scan . --team-model codex-cli`; selecting a larger automatic
+model count can include it alongside OpenRouter when both pass preflight.
 
 Reasoning-capable models expose an `auto` or explicit thinking-effort selector
 in `vulnhunter models`. OpenRouter choices come from its live model metadata;
@@ -249,6 +255,30 @@ python -m pip install \
   "git+https://github.com/JJsilvera1/Multi-VulnHunter.git#subdirectory=vulnhunter-agent"
 vulnhunter init
 ```
+
+For a local editable checkout on Windows PowerShell:
+
+```powershell
+git clone https://github.com/JJsilvera1/Multi-VulnHunter.git
+cd Multi-VulnHunter\vulnhunter-agent
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+vulnhunter init
+vulnhunter doctor
+vulnhunter scan .
+```
+
+Activate the environment again whenever you open a new PowerShell window:
+
+```powershell
+cd Multi-VulnHunter\vulnhunter-agent
+.\.venv\Scripts\Activate.ps1
+```
+
+If activation is unavailable, invoke the installed command directly with
+`.\.venv\Scripts\vulnhunter.exe`. On macOS or Linux, use
+`python3.12 -m venv .venv` followed by `source .venv/bin/activate`.
 
 For editable development or the legacy Claude skills:
 

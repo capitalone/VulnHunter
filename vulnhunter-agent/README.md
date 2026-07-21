@@ -26,6 +26,23 @@ vulnhunter doctor
 vulnhunter scan .
 ```
 
+For a local editable checkout on Windows PowerShell:
+
+```powershell
+cd Multi-VulnHunter\vulnhunter-agent
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+vulnhunter init
+vulnhunter doctor
+vulnhunter scan .
+```
+
+Each new PowerShell session must activate `.venv` again. If script activation
+is unavailable, run `.\.venv\Scripts\vulnhunter.exe` directly. On macOS or
+Linux, create the environment with `python3.12 -m venv .venv` and activate it
+with `source .venv/bin/activate`.
+
 Discover the available commands and options from the CLI itself:
 
 ```bash
@@ -177,6 +194,23 @@ It does not open or copy `~/.codex/auth.json`; Codex owns browser OAuth, token
 refresh, workspace policy, and logout. These assignments are ephemeral and
 read-only. Their billing is shown as `ChatGPT/Codex plan`, not a fabricated USD
 API amount, so they cannot participate in `--max-cost-usd` enforcement.
+
+Codex CLI has its own provider catalog; searching OpenRouter for `openai` does
+not show Codex-plan models. When Codex CLI is added to an existing config,
+VulnHunter opens its picker directly. Reconfigure it later with:
+
+```bash
+vulnhunter models --provider codex-cli
+```
+
+The saved alias is `codex-cli`. To scan with only that provider, use:
+
+```bash
+vulnhunter scan . --team-model codex-cli
+```
+
+An automatic roster with enough core models can include Codex CLI alongside
+OpenRouter when both pass preflight.
 
 Models are selected from the healthy configured pool, preferring provider
 diversity and configured priority. The exact roster, locality, source exposure,

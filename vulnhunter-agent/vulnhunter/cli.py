@@ -291,6 +291,7 @@ def _run_init(args: argparse.Namespace) -> int:
         print(f"Using existing VulnHunter config: {path}")
         print("Run with --force only if you want to regenerate and replace it.")
         config = load_engine_config(path)
+        codex_added = False
         codex_detection = discover_codex_cli()
         if codex_detection and "codex-cli" not in config.providers:
             add_codex = bool(args.allow_remote)
@@ -307,8 +308,32 @@ def _run_init(args: argparse.Namespace) -> int:
                 append_codex_cli_config(path, config, codex_detection)
                 print("Added Codex CLI provider without reading or storing OAuth tokens.")
                 config = load_engine_config(path)
+                codex_added = True
+        elif codex_detection and "codex-cli" in config.providers:
+            print(
+                "Codex CLI provider is already configured. Its models are separate "
+                "from OpenRouter; use 'vulnhunter models --provider codex-cli' "
+                "to change the saved Codex model."
+            )
         if not args.skip_model_picker and sys.stdin.isatty():
-            asyncio.run(_configure_models_interactively(config))
+            if codex_added:
+                print(
+                    "\nChoose the Codex CLI model next. It is a separate provider "
+                    "and will not appear in OpenRouter searches."
+                )
+                print(
+                    "After setup, use 'vulnhunter models --provider codex-cli' "
+                    "to change it again."
+                )
+                asyncio.run(
+                    _configure_models_interactively(
+                        config,
+                        provider_filter="codex-cli",
+                        offer_additional_models=False,
+                    )
+                )
+            else:
+                asyncio.run(_configure_models_interactively(config))
             config = load_engine_config(path)
         checks = asyncio.run(doctor(config, probe_models=False))
         for row in checks:
@@ -1485,6 +1510,7 @@ async def _configure_models_interactively(
     *,
     provider_filter: str | None = None,
     discovered: dict[str, dict[str, Any]] | None = None,
+    offer_additional_models: bool = True,
 ) -> None:
     discovered = discovered or await _discover_provider_models(
         config, provider_filter
@@ -1573,6 +1599,9 @@ async def _configure_models_interactively(
         print(f"Saved model defaults: {path}")
     else:
         print("Model defaults unchanged.")
+
+    if not offer_additional_models:
+        return
 
     selected_identities = {
         (model.provider, selections.get(alias, model.model))
