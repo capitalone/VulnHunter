@@ -11,8 +11,15 @@ import pytest
 import respx
 
 from agent import auth as auth_mod
-from agent.auth import AuthTokenError, OAuthTokenManager, resolve_verify
-from agent.config import OAuthConfig, TLSConfig
+from agent.auth import (
+    ApiKeyTokenManager,
+    AuthTokenError,
+    OAuthTokenManager,
+    SigV4TokenManager,
+    make_token_manager,
+    resolve_verify,
+)
+from agent.config import AnthropicConfig, OAuthConfig, TLSConfig
 
 
 def _oauth_cfg(**overrides: object) -> OAuthConfig:
@@ -214,3 +221,56 @@ class TestOAuthTokenManager:
             token_manager.get_valid_token()
         for record in caplog.records:
             assert "super-secret-token" not in record.getMessage()
+
+
+# ---------------------------------------------------------------------------
+# SigV4TokenManager + make_token_manager dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestSigV4TokenManager:
+    def test_returns_empty_token(self) -> None:
+        # No bearer exists in SigV4 mode — the CLI signs with the AWS chain.
+        assert SigV4TokenManager().get_valid_token() == ""
+
+    @respx.mock
+    def test_no_network_calls(self) -> None:
+        # Deterministic + offline: get_valid_token must not touch httpx.
+        # respx.mock with no routes registered raises on ANY outbound
+        # httpx request; the explicit zero-calls assert makes the
+        # contract visible either way.
+        mgr = SigV4TokenManager(name="probe")
+        assert mgr.get_valid_token() == ""
+        assert len(respx.calls) == 0
+
+
+class TestMakeTokenManager:
+    def _anthropic(self, **overrides: object) -> AnthropicConfig:
+        base = dict(model="m", auth_mode="api_key")
+        base.update(overrides)
+        return AnthropicConfig(**base)  # type: ignore[arg-type]
+
+    def test_sigv4_mode_returns_sigv4_manager(
+        self, agent_config
+    ) -> None:
+        cfg = agent_config(
+            anthropic=self._anthropic(
+                auth_mode="bedrock_sigv4", aws_region="us-east-1"
+            )
+        )
+        assert isinstance(make_token_manager(cfg), SigV4TokenManager)
+
+    def test_oauth_mode_returns_oauth_manager(self, agent_config) -> None:
+        cfg = agent_config(
+            anthropic=self._anthropic(
+                auth_mode="bedrock_oauth",
+                bedrock_base_url="https://b.example.com",
+            )
+        )
+        assert isinstance(make_token_manager(cfg), OAuthTokenManager)
+
+    def test_api_key_mode_returns_api_key_manager(self, agent_config) -> None:
+        cfg = agent_config(
+            anthropic=self._anthropic(auth_mode="api_key", api_key="sk-x")
+        )
+        assert isinstance(make_token_manager(cfg), ApiKeyTokenManager)

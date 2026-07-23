@@ -414,6 +414,93 @@ allowed_tools = ["Read", "Edit"]
         assert cfg.publish.enabled is True
         assert cfg.publish.destination_repo == "https://github.com/example/results"
 
+    def test_bedrock_sigv4_minimal(self, tmp_path: Path) -> None:
+        # SigV4 mode needs only a region; no [oauth] block, no bedrock_base_url.
+        path = tmp_path / "cfg.toml"
+        path.write_text(
+            """
+[anthropic]
+auth_mode = "bedrock_sigv4"
+model = "us.anthropic.claude-opus-4-8"
+aws_region = "us-east-1"
+"""
+        )
+        cfg = load_config(path)
+        assert cfg.anthropic.auth_mode == "bedrock_sigv4"
+        assert cfg.anthropic.aws_region == "us-east-1"
+        assert cfg.anthropic.bedrock_base_url == ""
+        assert cfg.anthropic.aws_profile == ""
+
+    def test_bedrock_sigv4_with_profile_and_endpoint(self, tmp_path: Path) -> None:
+        path = tmp_path / "cfg.toml"
+        path.write_text(
+            """
+[anthropic]
+auth_mode = "bedrock_sigv4"
+model = "us.anthropic.claude-opus-4-8"
+aws_region = "us-west-2"
+aws_profile = "vulnhunter"
+bedrock_base_url = "https://bedrock.vpce.example.com"
+"""
+        )
+        cfg = load_config(path)
+        assert cfg.anthropic.aws_profile == "vulnhunter"
+        assert cfg.anthropic.bedrock_base_url == "https://bedrock.vpce.example.com"
+
+    def test_aws_region_stripped_at_load(self, tmp_path: Path) -> None:
+        # A padded region ("  us-east-1  ") must be normalized at load so
+        # AWS_REGION and the sandbox allow-list never see the raw value.
+        path = tmp_path / "cfg.toml"
+        path.write_text(
+            """
+[anthropic]
+auth_mode = "bedrock_sigv4"
+model = "us.anthropic.claude-opus-4-8"
+aws_region = "  us-east-1  "
+"""
+        )
+        cfg = load_config(path)
+        assert cfg.anthropic.aws_region == "us-east-1"
+
+    def test_bedrock_sigv4_blank_region_raises(self, tmp_path: Path) -> None:
+        path = tmp_path / "cfg.toml"
+        path.write_text(
+            """
+[anthropic]
+auth_mode = "bedrock_sigv4"
+model = "m"
+aws_region = "   "
+"""
+        )
+        with pytest.raises(ValueError, match="aws_region"):
+            load_config(path)
+
+    def test_invalid_auth_mode_raises(self, tmp_path: Path) -> None:
+        path = tmp_path / "cfg.toml"
+        path.write_text(
+            """
+[anthropic]
+auth_mode = "bedrock_bogus"
+model = "m"
+"""
+        )
+        with pytest.raises(ValueError, match="auth_mode"):
+            load_config(path)
+
+    def test_bedrock_sigv4_profile_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("VULNHUNT_ANTHROPIC_AUTH_MODE", "bedrock_sigv4")
+        monkeypatch.setenv("VULNHUNT_ANTHROPIC_MODEL", "us.anthropic.claude-opus-4-8")
+        monkeypatch.setenv("VULNHUNT_ANTHROPIC_AWS_REGION", "us-east-1")
+        monkeypatch.setenv("VULNHUNT_ANTHROPIC_AWS_PROFILE", "from-env")
+        from agent import config as cfg_mod
+
+        monkeypatch.setattr(cfg_mod, "_DEFAULT_CONFIG_FILENAME", "no-such.toml")
+        cfg = load_config()
+        assert cfg.anthropic.auth_mode == "bedrock_sigv4"
+        assert cfg.anthropic.aws_profile == "from-env"
+
     def test_verify_tuple_fields_parse_from_toml(self, tmp_path: Path) -> None:
         # Regression: the [verify] list fields (allowed_clone_hosts,
         # token_path_prefixes) are built from generator expressions inside

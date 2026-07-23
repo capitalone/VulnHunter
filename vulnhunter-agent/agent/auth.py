@@ -1,6 +1,6 @@
 """Anthropic auth providers for the agent.
 
-Two token providers share a ``get_valid_token()`` interface so call sites
+Three token providers share a ``get_valid_token()`` interface so call sites
 don't care which auth mode is active:
 
 - ``ApiKeyTokenManager`` — direct Anthropic API. ``get_valid_token()``
@@ -9,6 +9,11 @@ don't care which auth mode is active:
   client_id + client_secret against the token endpoint, cache the access
   token, and refresh after a fraction of its declared lifetime. The bearer
   is forwarded to a Bedrock proxy as ANTHROPIC_AUTH_TOKEN.
+- ``SigV4TokenManager`` — Amazon Bedrock with SigV4 request signing. There
+  is no bearer token: the bundled Claude Code CLI signs each request with
+  the standard AWS credential chain (env vars, shared config/credentials,
+  SSO, container/instance role). ``get_valid_token()`` returns an empty
+  string so the shared call-site interface is preserved.
 
 ``make_token_manager(config)`` returns the right one for the configured
 ``anthropic.auth_mode``.
@@ -22,12 +27,23 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Protocol
 
 import httpx
 
 from .config import AgentConfig, OAuthConfig, TLSConfig
 
 logger = logging.getLogger(__name__)
+
+
+class TokenProvider(Protocol):
+    """The shared interface every auth-mode token manager implements.
+
+    Call sites annotate against this instead of a concrete manager so they
+    stay auth-mode agnostic (see ``make_token_manager``).
+    """
+
+    def get_valid_token(self) -> str: ...
 
 
 class AuthTokenError(RuntimeError):
@@ -56,6 +72,25 @@ class ApiKeyTokenManager:
 
     def get_valid_token(self) -> str:
         return self._api_key
+
+
+class SigV4TokenManager:
+    """Token provider for Amazon Bedrock SigV4 auth.
+
+    No bearer token exists in this mode: the bundled Claude Code CLI signs
+    Bedrock requests with the standard AWS credential chain. This provider
+    exists only to satisfy the shared ``get_valid_token()`` interface, so
+    every call site (LLM calls, issues, verify) stays auth-mode agnostic.
+    Returns an empty string — ``build_settings`` deliberately omits
+    ``ANTHROPIC_AUTH_TOKEN`` for this mode, so the empty value is never
+    consumed as a credential.
+    """
+
+    def __init__(self, name: str = "vulnhunter"):
+        self._name = name
+
+    def get_valid_token(self) -> str:
+        return ""
 
 
 class OAuthTokenManager:
@@ -115,12 +150,15 @@ class OAuthTokenManager:
 
 def make_token_manager(
     config: AgentConfig, name: str = "vulnhunter"
-) -> ApiKeyTokenManager | OAuthTokenManager:
+) -> ApiKeyTokenManager | OAuthTokenManager | SigV4TokenManager:
     """Return the Anthropic token provider for the configured auth mode.
 
-    Both providers expose ``get_valid_token()``, so callers can use the
-    result without caring whether auth is API-key or Bedrock/OAuth.
+    All providers expose ``get_valid_token()``, so callers can use the
+    result without caring whether auth is API-key, Bedrock/OAuth, or
+    Bedrock/SigV4.
     """
     if config.anthropic.auth_mode == "bedrock_oauth":
         return OAuthTokenManager(config.oauth, config.tls, name=name)
+    if config.anthropic.auth_mode == "bedrock_sigv4":
+        return SigV4TokenManager(name=name)
     return ApiKeyTokenManager(config.anthropic.api_key, name=name)

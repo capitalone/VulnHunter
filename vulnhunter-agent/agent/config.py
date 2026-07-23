@@ -37,11 +37,31 @@ class AnthropicConfig:
     #   "bedrock_oauth" — route through an AWS Bedrock proxy fronted by an
     #                     OAuth2 client-credentials token endpoint. Requires
     #                     bedrock_base_url and the [oauth] block.
+    #   "bedrock_sigv4" — call Amazon Bedrock directly with SigV4 request
+    #                     signing. The bundled Claude Code CLI signs requests
+    #                     with the standard AWS credential chain (env vars,
+    #                     shared config/credentials file, SSO, container/IMDS
+    #                     role) — no proxy, no bearer token, no OAuth block.
+    #                     Set aws_region (and optionally aws_profile). Leave
+    #                     bedrock_base_url blank to use the regional Bedrock
+    #                     runtime endpoint, or set it for a VPC/custom endpoint.
+    #                     Sandbox caveat: with [sandbox].enabled = true, the
+    #                     sandbox allow-lists Bedrock + regional STS and makes
+    #                     ~/.aws readable, so env-var, profile, and SSO-cached
+    #                     credentials work — but the link-local metadata
+    #                     endpoints (IMDS 169.254.169.254, ECS 169.254.170.2)
+    #                     are not allow-listed, so container/instance-role
+    #                     credentials require widening the sandbox network
+    #                     allow-list or disabling the sandbox.
     model: str
     auth_mode: str = "api_key"
     api_key: str = ""
     bedrock_base_url: str = ""
     aws_region: str = "us-east-1"
+    # bedrock_sigv4 mode only: optional named AWS profile from the shared
+    # config/credentials file. Blank → the CLI uses the default credential
+    # chain (AWS_* env vars, default profile, SSO, container/instance role).
+    aws_profile: str = ""
 
 
 @dataclass(frozen=True)
@@ -414,10 +434,10 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         .strip()
         .lower()
     )
-    if auth_mode not in ("api_key", "bedrock_oauth"):
+    if auth_mode not in ("api_key", "bedrock_oauth", "bedrock_sigv4"):
         raise ValueError(
-            "anthropic.auth_mode must be 'api_key' or 'bedrock_oauth', "
-            f"got '{auth_mode}'"
+            "anthropic.auth_mode must be 'api_key', 'bedrock_oauth', or "
+            f"'bedrock_sigv4', got '{auth_mode}'"
         )
     # api_key resolves from [anthropic].api_key / VULNHUNT_ANTHROPIC_API_KEY,
     # falling back to the standard ANTHROPIC_API_KEY env var.
@@ -433,11 +453,20 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         ).strip(),
         aws_region=str(
             _resolve(anthropic_raw, "anthropic", "aws_region", default="us-east-1")
-        ),
+        ).strip(),
+        aws_profile=str(
+            _resolve(anthropic_raw, "anthropic", "aws_profile", default="")
+        ).strip(),
     )
     if auth_mode == "bedrock_oauth" and not anthropic.bedrock_base_url:
         raise ValueError(
             "anthropic.auth_mode='bedrock_oauth' requires anthropic.bedrock_base_url"
+        )
+    # bedrock_sigv4 needs a region to build the endpoint / sign requests, but
+    # bedrock_base_url is optional (blank → regional Bedrock runtime endpoint).
+    if auth_mode == "bedrock_sigv4" and not anthropic.aws_region:
+        raise ValueError(
+            "anthropic.auth_mode='bedrock_sigv4' requires anthropic.aws_region"
         )
 
     oauth = OAuthConfig(

@@ -43,7 +43,7 @@ import logging
 from typing import Any
 
 from . import _llm
-from .auth import OAuthTokenManager
+from .auth import TokenProvider
 from .config import AgentConfig
 
 logger = logging.getLogger(__name__)
@@ -110,7 +110,7 @@ async def extract_cross_repo_references(
     comments_text: str,
     *,
     config: AgentConfig,
-    token_manager: OAuthTokenManager,
+    token_manager: TokenProvider,
     cost_tracker: "_llm.CostStats | None" = None,
 ) -> list[dict[str, str]]:
     """Run Haiku (Sonnet fallback) over ``comments_text`` and return the
