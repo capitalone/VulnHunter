@@ -447,6 +447,21 @@ bedrock_base_url = "https://bedrock.vpce.example.com"
         assert cfg.anthropic.aws_profile == "vulnhunter"
         assert cfg.anthropic.bedrock_base_url == "https://bedrock.vpce.example.com"
 
+    def test_aws_region_stripped_at_load(self, tmp_path: Path) -> None:
+        # A padded region ("  us-east-1  ") must be normalized at load so
+        # AWS_REGION and the sandbox allow-list never see the raw value.
+        path = tmp_path / "cfg.toml"
+        path.write_text(
+            """
+[anthropic]
+auth_mode = "bedrock_sigv4"
+model = "us.anthropic.claude-opus-4-8"
+aws_region = "  us-east-1  "
+"""
+        )
+        cfg = load_config(path)
+        assert cfg.anthropic.aws_region == "us-east-1"
+
     def test_bedrock_sigv4_blank_region_raises(self, tmp_path: Path) -> None:
         path = tmp_path / "cfg.toml"
         path.write_text(

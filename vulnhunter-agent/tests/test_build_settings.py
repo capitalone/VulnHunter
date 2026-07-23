@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 
 import pytest
@@ -107,6 +108,41 @@ class TestBuildSandbox:
         assert "bedrock.vpce.example.com" in domains
         # STS still allowed for credential resolution in the region.
         assert "sts.us-west-2.amazonaws.com" in domains
+
+    def test_sigv4_allows_reading_aws_config_dir(
+        self, agent_config: Callable[..., AgentConfig]
+    ) -> None:
+        # The deny-read list covers /home and /root, which on Linux hides
+        # ~/.aws (config, credentials, SSO cache) and would silently reduce
+        # the credential chain to env vars only. SigV4 mode must carve out
+        # a read-only allow for ~/.aws so aws_profile / SSO work sandboxed.
+        cfg = agent_config(
+            anthropic=AnthropicConfig(
+                model="us.anthropic.claude-opus-4-8",
+                auth_mode="bedrock_sigv4",
+                aws_region="us-east-1",
+            )
+        )
+        fs = _build_sandbox(cfg)["filesystem"]
+        assert os.path.expanduser("~/.aws") in fs["allowRead"]
+        # Read-only: the write allow-list is untouched.
+        assert fs["allowWrite"] == ["."]
+
+    def test_non_sigv4_modes_do_not_expose_aws_config_dir(
+        self, agent_config: Callable[..., AgentConfig]
+    ) -> None:
+        for anthropic in (
+            AnthropicConfig(model="m", auth_mode="api_key", api_key="sk-test"),
+            AnthropicConfig(
+                model="m",
+                auth_mode="bedrock_oauth",
+                bedrock_base_url="https://bedrock.example.com",
+                aws_region="us-east-1",
+            ),
+        ):
+            cfg = agent_config(anthropic=anthropic)
+            fs = _build_sandbox(cfg)["filesystem"]
+            assert os.path.expanduser("~/.aws") not in fs["allowRead"]
 
 
 # ---------------------------------------------------------------------------

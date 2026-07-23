@@ -11,6 +11,7 @@ sandbox, and (optionally) enables OTLP telemetry.
 from __future__ import annotations
 
 import json
+import os
 import re
 from urllib.parse import urlparse
 
@@ -52,9 +53,26 @@ def _anthropic_host(cfg: AgentConfig) -> str:
         # regional Bedrock runtime endpoint the CLI will call by default.
         if cfg.anthropic.bedrock_base_url:
             return urlparse(cfg.anthropic.bedrock_base_url).hostname or ""
-        region = cfg.anthropic.aws_region.strip()
+        region = cfg.anthropic.aws_region
         return f"bedrock-runtime.{region}.amazonaws.com" if region else ""
     return "api.anthropic.com"
+
+
+def _sandbox_allow_read_paths(cfg: AgentConfig) -> list[str]:
+    """Paths the sandboxed CLI may read.
+
+    Always the cwd (the cloned repo). In ``bedrock_sigv4`` mode also the
+    shared AWS config directory (``~/.aws`` — config, credentials, and the
+    SSO token cache): on Linux, home directories sit under the denied
+    ``/home`` / ``/root`` prefixes, so without this carve-out the credential
+    chain degrades to env-var credentials only and ``aws_profile`` / SSO
+    silently stop working. The allow entry is more specific than the deny
+    prefix, so it wins; it is read-only (``allowWrite`` is untouched).
+    """
+    paths = list(_SANDBOX_ALLOW_READ_PATHS)
+    if cfg.anthropic.auth_mode == "bedrock_sigv4":
+        paths.append(os.path.expanduser("~/.aws"))
+    return paths
 
 
 def _sandbox_allowed_domains(cfg: AgentConfig) -> list[str]:
@@ -70,7 +88,7 @@ def _sandbox_allowed_domains(cfg: AgentConfig) -> list[str]:
     host = _anthropic_host(cfg)
     domains = [host] if host else []
     if cfg.anthropic.auth_mode == "bedrock_sigv4":
-        region = cfg.anthropic.aws_region.strip()
+        region = cfg.anthropic.aws_region
         if region:
             sts = f"sts.{region}.amazonaws.com"
             if sts not in domains:
@@ -86,7 +104,7 @@ def _build_sandbox(cfg: AgentConfig) -> dict:
         "allowUnsandboxedCommands": cfg.sandbox.allow_unsandboxed_commands,
         "filesystem": {
             "denyRead": list(_SANDBOX_DENY_READ_PATHS),
-            "allowRead": list(_SANDBOX_ALLOW_READ_PATHS),
+            "allowRead": _sandbox_allow_read_paths(cfg),
             "denyWrite": list(_SANDBOX_DENY_WRITE_PATHS),
             "allowWrite": list(_SANDBOX_ALLOW_WRITE_PATHS),
         },

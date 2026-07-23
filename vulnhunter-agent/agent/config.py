@@ -45,6 +45,14 @@ class AnthropicConfig:
     #                     Set aws_region (and optionally aws_profile). Leave
     #                     bedrock_base_url blank to use the regional Bedrock
     #                     runtime endpoint, or set it for a VPC/custom endpoint.
+    #                     Sandbox caveat: with [sandbox].enabled = true, the
+    #                     sandbox allow-lists Bedrock + regional STS and makes
+    #                     ~/.aws readable, so env-var, profile, and SSO-cached
+    #                     credentials work — but the link-local metadata
+    #                     endpoints (IMDS 169.254.169.254, ECS 169.254.170.2)
+    #                     are not allow-listed, so container/instance-role
+    #                     credentials require widening the sandbox network
+    #                     allow-list or disabling the sandbox.
     model: str
     auth_mode: str = "api_key"
     api_key: str = ""
@@ -445,7 +453,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         ).strip(),
         aws_region=str(
             _resolve(anthropic_raw, "anthropic", "aws_region", default="us-east-1")
-        ),
+        ).strip(),
         aws_profile=str(
             _resolve(anthropic_raw, "anthropic", "aws_profile", default="")
         ).strip(),
@@ -456,7 +464,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         )
     # bedrock_sigv4 needs a region to build the endpoint / sign requests, but
     # bedrock_base_url is optional (blank → regional Bedrock runtime endpoint).
-    if auth_mode == "bedrock_sigv4" and not anthropic.aws_region.strip():
+    if auth_mode == "bedrock_sigv4" and not anthropic.aws_region:
         raise ValueError(
             "anthropic.auth_mode='bedrock_sigv4' requires anthropic.aws_region"
         )

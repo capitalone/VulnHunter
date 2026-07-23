@@ -27,12 +27,23 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Protocol
 
 import httpx
 
 from .config import AgentConfig, OAuthConfig, TLSConfig
 
 logger = logging.getLogger(__name__)
+
+
+class TokenProvider(Protocol):
+    """The shared interface every auth-mode token manager implements.
+
+    Call sites annotate against this instead of a concrete manager so they
+    stay auth-mode agnostic (see ``make_token_manager``).
+    """
+
+    def get_valid_token(self) -> str: ...
 
 
 class AuthTokenError(RuntimeError):

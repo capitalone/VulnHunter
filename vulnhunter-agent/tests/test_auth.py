@@ -233,10 +233,15 @@ class TestSigV4TokenManager:
         # No bearer exists in SigV4 mode — the CLI signs with the AWS chain.
         assert SigV4TokenManager().get_valid_token() == ""
 
+    @respx.mock
     def test_no_network_calls(self) -> None:
         # Deterministic + offline: get_valid_token must not touch httpx.
+        # respx.mock with no routes registered raises on ANY outbound
+        # httpx request; the explicit zero-calls assert makes the
+        # contract visible either way.
         mgr = SigV4TokenManager(name="probe")
         assert mgr.get_valid_token() == ""
+        assert len(respx.calls) == 0
 
 
 class TestMakeTokenManager:

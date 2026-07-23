@@ -61,7 +61,7 @@ from tenacity import (
     wait_none,
 )
 
-from .auth import OAuthTokenManager
+from .auth import TokenProvider
 from .build_settings import build_claude_settings
 from .config import AgentConfig
 from ._transient import classify as _classify_transient, is_transient_status
@@ -386,7 +386,7 @@ async def call_json(
     system: str,
     user: str,
     config: AgentConfig,
-    token_manager: OAuthTokenManager,
+    token_manager: TokenProvider,
     cost_tracker: CostStats | None = None,
     backoffs: tuple[float, ...] = _TRANSIENT_BACKOFFS,
     log_retries: bool = False,
@@ -480,7 +480,7 @@ async def call_json_with_fallback(
     system: str,
     user: str,
     config: AgentConfig,
-    token_manager: OAuthTokenManager,
+    token_manager: TokenProvider,
     cost_tracker: CostStats | None = None,
     stage: str = "",
     backoffs: tuple[float, ...] = _TRANSIENT_BACKOFFS,
