@@ -414,6 +414,40 @@ allowed_tools = ["Read", "Edit"]
         assert cfg.publish.enabled is True
         assert cfg.publish.destination_repo == "https://github.com/example/results"
 
+    def test_verify_tuple_fields_parse_from_toml(self, tmp_path: Path) -> None:
+        # Regression: the [verify] list fields (allowed_clone_hosts,
+        # token_path_prefixes) are built from generator expressions inside
+        # tuple(...) calls in load_config. A missing close-paren on one of
+        # them is a module-level SyntaxError that breaks the whole agent
+        # package import — so this exercises those two fields end-to-end.
+        path = tmp_path / "cfg.toml"
+        path.write_text(
+            """
+[anthropic]
+bedrock_base_url = "https://b"
+model = "m"
+[oauth]
+token_endpoint = "https://o"
+client_id = "x"
+client_secret = "y"
+[verify]
+allowed_clone_hosts = ["git.internal.example", "  ", "ghe.example.com"]
+token_path_prefixes = ["my-org", "my-org/allowed-repo", ""]
+"""
+        )
+        cfg = load_config(path)
+        # Blank/whitespace-only entries are dropped; order preserved.
+        assert cfg.verify.allowed_clone_hosts == (
+            "git.internal.example",
+            "ghe.example.com",
+        )
+        assert cfg.verify.token_path_prefixes == (
+            "my-org",
+            "my-org/allowed-repo",
+        )
+        # And the downstream int bounds that follow the tuple fields still resolve.
+        assert cfg.verify.max_comment_pages == 20
+
 
 # ---------------------------------------------------------------------------
 # [logging] section
