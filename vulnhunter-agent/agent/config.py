@@ -288,6 +288,10 @@ class VerifyConfig:
     max_event_pages: int = 20
     max_edit_diff_bytes: int = 200_000
     max_edit_total_bytes: int = 5_000_000
+    # Upper bound on additional cross-repo clones attempted per verify run.
+    # Bounds attacker-supplied cross-repo references (derived by the Haiku
+    # pre-flight from issue/comment text) from driving unbounded clones.
+    max_additional_repos: int = 10
 
 
 @dataclass(frozen=True)
@@ -829,6 +833,11 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         max_edit_total_bytes=int(
             _resolve(
                 verify_raw, "verify", "max_edit_total_bytes", kind=int, default=5_000_000
+            )
+        ),
+        max_additional_repos=int(
+            _resolve(
+                verify_raw, "verify", "max_additional_repos", kind=int, default=10
             )
         ),
     )

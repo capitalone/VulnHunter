@@ -758,6 +758,127 @@ async def test_run_verify_preflight_unresolvable_hint_becomes_ignored(
     assert "agent annotations" in captured_comments[0]
 
 
+def test_process_clone_request_caps_additional_repos(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """CANON-37 (resource exhaustion): ``requested_sources`` is derived by
+    an LLM from attacker-authored issue/comment text and has no length cap.
+    Every resolvable reference triggers one ``clone_additional_repo`` call.
+    An attacker can pack many distinct resolvable references to force
+    unbounded clones -> disk/resource exhaustion.
+
+    ``_process_clone_request`` MUST stop cloning once
+    ``MAX_ADDITIONAL_REPOS`` repos have been cloned, regardless of how
+    many resolvable sources were requested.
+    """
+    cap = verify_module.MAX_ADDITIONAL_REPOS
+    # More resolvable sources than the cap.
+    n_sources = cap * 5 + 3
+    sources = [
+        {"repo_hint": f"https://github.com/org/repo-{i}"} for i in range(n_sources)
+    ]
+
+    clone_calls: list[str] = []
+
+    def fake_resolve(hint, aliases, allowed_hosts=()):
+        return hint  # every hint resolves
+
+    def fake_clone(url, clone_root, **kwargs):
+        clone_calls.append(url)
+        p = Path(clone_root)
+        p.mkdir(parents=True, exist_ok=True)
+        return p  # unique per-hint path -> passes dedup, appended to state
+
+    monkeypatch.setattr(verify_module, "resolve_repo_hint", fake_resolve)
+    monkeypatch.setattr(verify_module, "clone_additional_repo", fake_clone)
+
+    state = verify_module._RunState()
+
+    verify_module._process_clone_request(
+        {"requested_sources": sources},
+        state=state,
+        github_token="x",
+        github_host="github.com",
+        timeout_seconds=1,
+        additional_repos_dir=tmp_path / "additional_repos",
+        aliases={},
+        allowed_hosts=("github.com",),
+    )
+
+    assert len(clone_calls) <= cap, (
+        f"unbounded clone: {len(clone_calls)} clones for {n_sources} sources "
+        f"(cap={cap})"
+    )
+    assert len(state.additional_repos) <= cap
+
+
+def test_process_clone_request_caps_failed_clone_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """CANON-37 (resource exhaustion), attempt-cap variant.
+
+    ``resolve_repo_hint`` returns any allow-listed-host URL with no
+    existence check, so an attacker can pack many
+    ``github.com/org/nonexistent-{i}`` references. Every one resolves and
+    reaches ``clone_additional_repo`` (the expensive 300s network clone),
+    but each clone FAILS (``ResolveError``) and is routed to
+    ``ignored_hints`` WITHOUT growing ``state.additional_repos``.
+
+    A cap gated on ``len(state.additional_repos)`` therefore never trips —
+    the retained count stays at 0 — and clone ATTEMPTS run unbounded. The
+    cap MUST bound clone attempts, not retained clones: with more sources
+    than the cap and every clone failing, the number of
+    ``clone_additional_repo`` calls MUST be bounded by the cap.
+    """
+    from agent.verify_resolve import ResolveError
+
+    cap = verify_module.MAX_ADDITIONAL_REPOS
+    n_sources = cap * 5 + 3
+    # Distinct, resolvable-but-nonexistent references (unique hints so the
+    # ignored_hints dedup can't collapse them before the clone stage).
+    sources = [
+        {"repo_hint": f"https://github.com/org/nonexistent-{i}"}
+        for i in range(n_sources)
+    ]
+
+    clone_calls: list[str] = []
+
+    def fake_resolve(hint, aliases, allowed_hosts=()):
+        return hint  # allow-listed host, no existence check -> always a URL
+
+    def fake_clone(url, clone_root, **kwargs):
+        # Every clone reaches the network and fails (repo doesn't exist).
+        clone_calls.append(url)
+        raise ResolveError(f"repository not found: {url}")
+
+    monkeypatch.setattr(verify_module, "resolve_repo_hint", fake_resolve)
+    monkeypatch.setattr(verify_module, "clone_additional_repo", fake_clone)
+
+    state = verify_module._RunState()
+
+    verify_module._process_clone_request(
+        {"requested_sources": sources},
+        state=state,
+        github_token="x",
+        github_host="github.com",
+        timeout_seconds=1,
+        additional_repos_dir=tmp_path / "additional_repos",
+        aliases={},
+        allowed_hosts=("github.com",),
+    )
+
+    # Every clone failed, so nothing is retained...
+    assert len(state.additional_repos) == 0
+    # ...but attempts MUST still be bounded by the cap. Under a
+    # retained-count cap this would equal n_sources (unbounded).
+    assert len(clone_calls) <= cap, (
+        f"unbounded clone ATTEMPTS: {len(clone_calls)} failed clones for "
+        f"{n_sources} nonexistent sources (cap={cap})"
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_verify_all_open_issues_exits_1_with_list(
     verify_config,

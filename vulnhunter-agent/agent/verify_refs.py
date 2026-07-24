@@ -48,6 +48,13 @@ from .config import AgentConfig
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on cross-repo references coerced from a single pre-flight
+# extraction. The response is derived by an LLM from attacker-authored
+# issue/comment text and is otherwise unbounded; capping here keeps the
+# reference list feeding the downstream clone loop bounded even before the
+# clone-attempt cap in ``verify._process_clone_request`` applies.
+MAX_EXTRACTED_SOURCES = 10
+
 
 _EXTRACTOR_SYSTEM = """You extract cross-repository references from a \
 developer-comments markdown file into strict JSON. You return ONLY a JSON \
@@ -196,4 +203,12 @@ def _coerce_sources(parsed: Any) -> list[dict[str, str]]:
                 "reason": reason,
             }
         )
+    if len(out) > MAX_EXTRACTED_SOURCES:
+        logger.warning(
+            "Pre-flight extractor returned %d cross-repo reference(s); "
+            "truncating to %d to bound downstream clone work.",
+            len(out),
+            MAX_EXTRACTED_SOURCES,
+        )
+        out = out[:MAX_EXTRACTED_SOURCES]
     return out
