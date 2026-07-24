@@ -13,6 +13,18 @@ from local_harness.config import (
 from local_harness.scan import extract_cost_from_log
 
 
+def _ignore_symlinks(dirpath, names):
+    """copytree ignore callable that drops any symlink entry.
+
+    Cloned repos are untrusted; a planted symlink (e.g. secret -> /etc/passwd)
+    would otherwise have its target's contents copied into the published upload
+    (CANON-18: arbitrary host-file read). Called per-directory, so nested
+    symlinks are handled too. Dropping the entry entirely means neither the
+    symlink nor a dangling link ships.
+    """
+    return [name for name in names if os.path.islink(os.path.join(dirpath, name))]
+
+
 def parse_repo_list(repo_list_file=None):
     """Read REPO_LIST.txt and return list of URLs.
 
@@ -51,14 +63,25 @@ def collect_results(clone_base=None, upload_dir=None):
 
     for entry in sorted(os.listdir(clone_base)):
         entry_path = os.path.join(clone_base, entry)
-        if not os.path.isdir(entry_path):
+        # Skip symlinked repo entries: os.path.isdir follows symlinks, so a
+        # symlinked entry could redirect enumeration outside clone_base
+        # (CANON-18 defense-in-depth).
+        if os.path.islink(entry_path) or not os.path.isdir(entry_path):
             continue
         if "_VULNHUNT_RESULTS_" in entry:
             continue
 
+        # A results-dir whose *root* is a symlink must be skipped entirely:
+        # os.path.isdir() follows it, and shutil.copytree() would then follow
+        # the symlinked source and copy the target dir's contents (e.g.
+        # ~/.ssh) into the published upload. The ignore= callable below only
+        # drops symlinks *nested inside* a real tree, not a symlinked root
+        # (CANON-18: arbitrary host-file read).
         results_dirs = [
             d for d in os.listdir(entry_path)
-            if os.path.isdir(os.path.join(entry_path, d)) and "_VULNHUNT_RESULTS_" in d
+            if "_VULNHUNT_RESULTS_" in d
+            and not os.path.islink(os.path.join(entry_path, d))
+            and os.path.isdir(os.path.join(entry_path, d))
         ]
 
         if not results_dirs:
@@ -70,7 +93,7 @@ def collect_results(clone_base=None, upload_dir=None):
             dst = os.path.join(upload_dir, rdir)
             if os.path.isdir(dst):
                 shutil.rmtree(dst)
-            shutil.copytree(src, dst)
+            shutil.copytree(src, dst, ignore=_ignore_symlinks)
             copied.append(rdir)
 
     print(f"{'=' * 60}")

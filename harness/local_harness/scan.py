@@ -70,6 +70,22 @@ def has_valid_results(clone_dir):
     return os.path.isfile(readme) and os.path.getsize(readme) > 100
 
 
+def _remove_results_entry(path):
+    """Remove a results entry safely.
+
+    An untrusted cloned repo can plant a symlink named *_VULNHUNT_RESULTS_*
+    pointing at a directory. os.path.isdir follows symlinks, so the old cleanup
+    code reached shutil.rmtree(<symlink>), which raises
+    "Cannot call rmtree on a symbolic link" — an unhandled OSError that aborts
+    the entire scan/batch run (CANON-34, availability DoS). Unlink the planted
+    symlink (never its target); only rmtree real directories.
+    """
+    if os.path.islink(path):
+        os.unlink(path)
+    elif os.path.isdir(path):
+        shutil.rmtree(path)
+
+
 def clean_incomplete_results(clone_dir, log_filename="benchmark_scan.log"):
     """Remove results dirs that lack a valid README.md so a resume will re-scan them.
 
@@ -81,11 +97,14 @@ def clean_incomplete_results(clone_dir, log_filename="benchmark_scan.log"):
     for entry in os.listdir(clone_dir):
         if "_VULNHUNT_RESULTS_" in entry:
             full_path = os.path.join(clone_dir, entry)
-            if not os.path.isdir(full_path):
+            is_link = os.path.islink(full_path)
+            if not is_link and not os.path.isdir(full_path):
                 continue
+            # A planted symlink is never a valid results dir; remove it (safely,
+            # without following it) so a resume re-scans cleanly.
             readme = os.path.join(full_path, "README.md")
-            if not (os.path.isfile(readme) and os.path.getsize(readme) > 100):
-                shutil.rmtree(full_path)
+            if is_link or not (os.path.isfile(readme) and os.path.getsize(readme) > 100):
+                _remove_results_entry(full_path)
                 removed.append(entry)
                 log_file = os.path.join(clone_dir, log_filename)
                 if os.path.isfile(log_file):
@@ -104,8 +123,8 @@ def clean_prior_results(clone_dir, log_filename="benchmark_scan.log"):
     for entry in os.listdir(clone_dir):
         if "_VULNHUNT_RESULTS_" in entry:
             full_path = os.path.join(clone_dir, entry)
-            if os.path.isdir(full_path):
-                shutil.rmtree(full_path)
+            if os.path.islink(full_path) or os.path.isdir(full_path):
+                _remove_results_entry(full_path)
                 removed.append(entry)
     log_file = os.path.join(clone_dir, log_filename)
     if os.path.isfile(log_file):

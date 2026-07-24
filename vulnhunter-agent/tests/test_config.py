@@ -625,3 +625,22 @@ retries = false
         cfg = load_config(path)
         assert cfg.logging.per_turn_usage is True
         assert cfg.logging.retries is False
+
+
+class TestModuleImportable:
+    """Regression: the agent.config module must parse and expose load_config.
+
+    A prior syntax error (an unclosed VerifyConfig(token_path_prefixes=...)
+    generator) prevented the whole agent package from importing.
+    """
+
+    def test_agent_config_imports(self) -> None:
+        import importlib
+
+        module = importlib.import_module("agent.config")
+        assert module is not None
+
+    def test_load_config_is_callable(self) -> None:
+        import agent.config
+
+        assert callable(agent.config.load_config)

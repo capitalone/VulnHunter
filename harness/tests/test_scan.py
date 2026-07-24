@@ -101,6 +101,44 @@ def test_clean_prior_results_missing_dir(tmp_path):
     assert scan.clean_prior_results(str(tmp_path / "nope")) == []
 
 
+def test_clean_prior_results_symlink_to_dir_no_crash(tmp_path):
+    # CANON-34: an untrusted clone can plant a symlink named
+    # *_VULNHUNT_RESULTS_* pointing at a directory. os.path.isdir follows the
+    # link so the old code reached shutil.rmtree(symlink) -> OSError, aborting
+    # the whole scan (DoS). Cleanup must remove the link (not its target)
+    # without raising.
+    target = tmp_path / "real_target_dir"
+    target.mkdir()
+    (target / "keep.txt").write_text("do not delete me")
+
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    link = clone / "evil_VULNHUNT_RESULTS_1"
+    os.symlink(str(target), str(link))
+
+    removed = scan.clean_prior_results(str(clone))  # must not raise
+    assert not os.path.lexists(str(link)), "planted symlink was not removed"
+    assert target.is_dir() and (target / "keep.txt").exists(), \
+        "symlink target must be left intact (only the link is removed)"
+
+
+def test_clean_incomplete_results_symlink_to_dir_no_crash(tmp_path):
+    # CANON-34 companion: same DoS applies to clean_incomplete_results.
+    target = tmp_path / "real_target_dir"
+    target.mkdir()
+    (target / "keep.txt").write_text("do not delete me")
+
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    link = clone / "evil_VULNHUNT_RESULTS_1"
+    os.symlink(str(target), str(link))
+
+    scan.clean_incomplete_results(str(clone))  # must not raise
+    assert not os.path.lexists(str(link)), "planted symlink was not removed"
+    assert target.is_dir() and (target / "keep.txt").exists(), \
+        "symlink target must be left intact (only the link is removed)"
+
+
 # --- log inspection ---
 
 def test_is_rate_limit_failure_no_file():
