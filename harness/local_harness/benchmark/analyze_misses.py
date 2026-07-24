@@ -259,13 +259,17 @@ def invoke_diagnostic(finding, phase_key, evidence, results_dir, repo_dir):
 
     print(f"    [{fid}] Invoking claude ({MODEL}) in agentic mode, timeout 1200s ...", flush=True)
 
+    # Bash(find:*) is intentionally excluded: it would permit `find -exec <cmd>`,
+    # i.e. arbitrary command execution over the untrusted repo_dir. RESIDUAL: the
+    # remaining Bash read commands (grep/wc/ls/head/tail/cat) can still read host
+    # files; full hardening would drop Bash entirely in favor of Read/Grep/Glob.
     cmd = [
         "claude", "-p", prompt,
         "--output-format", "text",
         "--model", MODEL,
         "--system-prompt", DIAGNOSTIC_SYSTEM_PROMPT,
         "--allowedTools", "Read", "Bash(grep:*)", "Bash(wc:*)", "Bash(ls:*)",
-        "Bash(find:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(cat:*)",
+        "Bash(head:*)", "Bash(tail:*)", "Bash(cat:*)",
         "--permission-mode", "acceptEdits",
         "--add-dir", repo_dir,
         "--add-dir", results_dir,

@@ -252,6 +252,91 @@ def test_scan_folder_readonly_appends_prompt(monkeypatch, tmp_path):
     assert "read-only scan" not in captured["prompt"]
 
 
+def _capture_scan_tools(monkeypatch, tmp_path, **scan_kwargs):
+    """Run scan_folder with Popen stubbed and return the --allowedTools list."""
+    folder = tmp_path / "repo"
+    folder.mkdir()
+    monkeypatch.setattr(scan, "SKILLS_DIR", str(tmp_path / "skills"))
+    (tmp_path / "skills").mkdir()
+
+    captured = {}
+
+    def fake_popen(cmd, *a, **k):
+        captured["argv"] = cmd
+        return _FakePopen([json.dumps({"type": "result"}) + "\n"], returncode=0)
+    monkeypatch.setattr(scan.subprocess, "Popen", fake_popen)
+
+    class _NoTimer:
+        def __init__(self, *a, **k):
+            pass
+        def start(self):
+            pass
+        def cancel(self):
+            pass
+    monkeypatch.setattr(scan.threading, "Timer", _NoTimer)
+
+    scan.scan_folder(str(folder), **scan_kwargs)
+    argv = captured["argv"]
+    idx = argv.index("--allowedTools")
+    tools = []
+    for tok in argv[idx + 1:]:
+        if tok.startswith("--"):
+            break
+        tools.append(tok)
+    return tools, argv
+
+
+def test_scan_folder_default_is_readonly_no_bash(monkeypatch, tmp_path):
+    """CANON-03: scans are read-only BY DEFAULT and must not grant Bash.
+
+    The untrusted-repo scan paths (batch/benchmark) rely on this default, so
+    prompt-injected content cannot drive host command execution. The read-only
+    set retains Read/Write/Edit/Agent/AskUserQuestion/Grep/Glob but not Bash.
+    """
+    tools, argv = _capture_scan_tools(monkeypatch, tmp_path)  # no readonly arg -> default
+    assert "Bash" not in tools, f"default scan must not grant Bash: {tools}"
+    assert {"Read", "Write", "Edit", "Agent", "AskUserQuestion", "Grep", "Glob"} <= set(tools), (
+        f"default read-only scan tool set unexpected: {tools}"
+    )
+
+
+def test_scan_folder_readonly_no_bash(monkeypatch, tmp_path):
+    """CANON-03: explicit readonly=True yields the same no-Bash tool set."""
+    tools, _ = _capture_scan_tools(monkeypatch, tmp_path, readonly=True)
+    assert "Bash" not in tools, f"readonly scan must not grant Bash: {tools}"
+    assert {"Read", "Write", "Edit", "Agent", "AskUserQuestion", "Grep", "Glob"} <= set(tools)
+
+
+def test_scan_folder_execute_optin_grants_bash(monkeypatch, tmp_path):
+    """CANON-03: only an explicit opt-out (readonly=False) re-adds Bash."""
+    tools, argv = _capture_scan_tools(monkeypatch, tmp_path, readonly=False)
+    assert {"Read", "Write", "Edit", "Bash", "Agent"} <= set(tools), (
+        f"execute scan should grant the full set incl Bash: {tools}"
+    )
+    assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
+
+
+def _add_dir_values(argv):
+    """Collect every value following an --add-dir flag in a Popen argv."""
+    return [argv[i + 1] for i, tok in enumerate(argv[:-1]) if tok == "--add-dir"]
+
+
+def test_scan_folder_readonly_no_parent_add_dir(monkeypatch, tmp_path):
+    """CANON-03/Fix B: a read-only (default) scan must NOT --add-dir the parent.
+
+    Granting write to the parent dir (via acceptEdits + Write/Edit) would let
+    injected scanned-repo content overwrite sibling clones. The scanned folder
+    itself must still be added (results are written under it).
+    """
+    _tools, argv = _capture_scan_tools(monkeypatch, tmp_path)  # default readonly
+    folder = str(tmp_path / "repo")
+    add_dirs = _add_dir_values(argv)
+    assert folder in add_dirs, f"scanned folder must be added: {add_dirs}"
+    assert os.path.dirname(folder) not in add_dirs, (
+        f"parent dir must NOT be added for a read-only scan: {add_dirs}"
+    )
+
+
 def test_scan_folder_timeout(monkeypatch, tmp_path):
     folder = tmp_path / "repo"
     folder.mkdir()

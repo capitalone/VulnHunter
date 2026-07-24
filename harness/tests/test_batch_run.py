@@ -46,7 +46,7 @@ def test_cmd_scan_success(monkeypatch, tmp_path):
             for t in targets[1:]
         ]
     monkeypatch.setattr(brun, "scan_targets", fake_scan_targets)
-    brun.cmd_scan(_Args(re_clone=False, resume=False, max_workers=2, readonly=False))
+    brun.cmd_scan(_Args(re_clone=False, resume=False, max_workers=2, execute=False))  # Updated for CANON-03
 
 
 def test_cmd_scan_resume_all_have_results(monkeypatch, tmp_path):
@@ -71,23 +71,30 @@ def test_cmd_scan_resume_partial(monkeypatch, tmp_path):
                         lambda targets, max_workers=None, log_filename=None, readonly=False: [
                             (t["key"], ScanResult(t["clone_dir"], t["key"], 0, 1, 1.0, "rd", {}))
                             for t in targets])
-    brun.cmd_scan(_Args(re_clone=False, resume=True, max_workers=1, readonly=False))
+    brun.cmd_scan(_Args(re_clone=False, resume=True, max_workers=1, execute=False))  # Updated for CANON-03
 
 
 def test_cmd_scan_readonly_propagates(monkeypatch, tmp_path):
+    # CANON-03: read-only is the default; --execute opts into code execution.
     monkeypatch.setattr(brun, "parse_repo_list", lambda: ["https://github.com/a/b"])
     monkeypatch.setattr(brun, "BATCH_CLONE_BASE_DIR", str(tmp_path))
     monkeypatch.setattr(brun, "shallow_clone", lambda url, td, re_clone=False: (td, None))
 
     seen = {}
 
-    def fake_scan_targets(targets, max_workers=None, log_filename=None, readonly=False):
+    def fake_scan_targets(targets, max_workers=None, log_filename=None, readonly=True):
         seen["readonly"] = readonly
         return [(t["key"], ScanResult(t["clone_dir"], t["key"], 0, 1, 1.0, "rd", {})) for t in targets]
 
     monkeypatch.setattr(brun, "scan_targets", fake_scan_targets)
-    brun.cmd_scan(_Args(re_clone=False, resume=False, max_workers=1, readonly=True))
+
+    # Default (execute=False) -> read-only scan (no Bash on the untrusted repo).
+    brun.cmd_scan(_Args(re_clone=False, resume=False, max_workers=1, execute=False))
     assert seen["readonly"] is True
+
+    # Explicit --execute opts into code execution.
+    brun.cmd_scan(_Args(re_clone=False, resume=False, max_workers=1, execute=True))
+    assert seen["readonly"] is False
 
 
 def test_cmd_status(monkeypatch):

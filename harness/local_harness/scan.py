@@ -174,7 +174,7 @@ def extract_cost_from_log(log_file_path):
     return {}
 
 
-def scan_folder(folder_path, log_file=None, readonly=False):
+def scan_folder(folder_path, log_file=None, readonly=True):
     """Run vulnhunt on one folder, stream events to a log file.
 
     Returns a ScanResult (folder_path, label, returncode, event_count,
@@ -203,15 +203,35 @@ def scan_folder(folder_path, log_file=None, readonly=False):
     print(f"  [{ts()}] [{label}] STARTING scan", flush=True)
     start = time.time()
 
+    # CANON-03: scanning an untrusted repo is read-only BY DEFAULT so that
+    # prompt-injected content in the scanned repo cannot drive host command
+    # execution. The read-only tool set intentionally excludes Bash (no shell
+    # execution); it retains Read/Grep/Glob for analysis, Write/Edit so the
+    # agent can record findings, and Agent/AskUserQuestion. Only an explicit
+    # opt-out (readonly=False) re-adds Bash for scans that must execute code.
+    #
+    # The scan does NOT --add-dir the parent (sibling clones): under acceptEdits
+    # with Write/Edit granted, injected scanned-repo content could otherwise
+    # overwrite sibling clones. Results are written under folder_path (the cwd),
+    # so parent access is unnecessary. RESIDUAL: SKILLS_DIR/PHASES_DIR are still
+    # readable AND writable under acceptEdits, so injected content could persist
+    # edits to skill/phase files; fully closing that would require finer
+    # per-path permission controls (out of scope for this patch).
+    if readonly:
+        tool_args = ["--allowedTools",
+                     "Read", "Write", "Edit", "Agent",
+                     "AskUserQuestion", "Grep", "Glob"]
+    else:
+        tool_args = ["--allowedTools", "Read", "Write", "Edit", "Bash", "Agent"]
+
     proc = subprocess.Popen(
         ["claude", "-p", prompt,
          "--output-format", "stream-json",
          "--verbose",
-         "--allowedTools", "Read", "Write", "Edit", "Bash", "Agent",
+         *tool_args,
          "--permission-mode", "acceptEdits",
          "--model", MODEL,
          "--add-dir", folder_path,
-         "--add-dir", os.path.dirname(folder_path),
          "--add-dir", SKILLS_DIR,
          "--add-dir", PHASES_DIR],
         stdout=subprocess.PIPE,
@@ -280,7 +300,7 @@ def scan_folder(folder_path, log_file=None, readonly=False):
     return ScanResult(folder_path, label, proc.returncode, event_count, elapsed, results_dir, cost_data)
 
 
-def scan_folder_with_retry(folder_path, log_filename=None, readonly=False):
+def scan_folder_with_retry(folder_path, log_filename=None, readonly=True):
     """Wrap scan_folder with retry on 429 rate limit failures.
 
     Returns: Same ScanResult as scan_folder, with elapsed summed across attempts.
@@ -317,7 +337,7 @@ def scan_folder_with_retry(folder_path, log_filename=None, readonly=False):
         return result._replace(elapsed=total_elapsed)
 
 
-def scan_targets(targets, max_workers=None, status_interval=300, log_filename=None, readonly=False):
+def scan_targets(targets, max_workers=None, status_interval=300, log_filename=None, readonly=True):
     """Scan a list of benchmark targets in parallel with 429 retry.
 
     targets: list of dicts with at least 'clone_dir' and 'key' fields.

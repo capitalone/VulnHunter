@@ -697,7 +697,13 @@ async def run_vulnhunt(
                     # uppercase filename — the SDK's case-sensitive lookup is why this
                     # only worked on the case-insensitive macOS host before the rename).
                     # ``skills="all"`` enables every discovered skill.
-                    setting_sources=["user", "project", "local"],
+                    #
+                    # CANON-19: ``cwd`` is the untrusted cloned repo. "project"/"local"
+                    # would load that repo's .claude/settings(.local).json (hooks,
+                    # permissions) and its skills, executing attacker-controlled config
+                    # on the host. Restrict to "user" only — the trusted vulnhunt skill
+                    # lives in the user dir, so scan functionality is unaffected.
+                    setting_sources=["user"],
                     skills="all",
                 )
                 session_result = await _run_scan_session(

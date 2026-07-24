@@ -94,7 +94,7 @@ def cmd_scan(args):
 
     start = time.time()
     results = scan_targets(targets, max_workers=args.max_workers, log_filename=BATCH_LOG_FILENAME,
-                           readonly=args.readonly)
+                           readonly=not args.execute)
     elapsed = time.time() - start
 
     # Phase 3: Summary
@@ -142,8 +142,9 @@ def main():
                              help="Skip repos that already have a completed scan report")
     scan_parser.add_argument("--max-workers", type=int, default=MAX_SCAN_WORKERS,
                              help=f"Parallel scan workers (default: {MAX_SCAN_WORKERS})")
-    scan_parser.add_argument("--readonly", action="store_true",
-                             help="Read-only scan: skip dependency installation and code execution")
+    scan_parser.add_argument("--execute", action="store_true",
+                             help="Allow the scan agent to execute code (grants the Bash tool). "
+                                  "Default is a read-only scan with no code execution (CANON-03).")
 
     subparsers.add_parser("status", help="Check scan progress")
 
@@ -158,7 +159,7 @@ def main():
         args.re_clone = False
         args.resume = False
         args.max_workers = MAX_SCAN_WORKERS
-        args.readonly = False
+        args.execute = False
 
     if args.command == "scan":
         cmd_scan(args)
