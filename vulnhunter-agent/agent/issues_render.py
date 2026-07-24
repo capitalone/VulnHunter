@@ -101,6 +101,24 @@ def render_title(f: Finding) -> str:
 _MD_ESCAPE_CHARS = ("\\", "`", "[", "]")
 
 
+# Machine-readable footer markers (``<!-- vulnhunt-finding-id: ... -->`` etc.)
+# are intentionally NOT html.escaped so the marker regexes stay exact. But the
+# values (``f.id``, ``report.results_dir_name``) are attacker-influenced
+# LLM/scan-README data, so a value containing ``-->`` would close the comment
+# and inject arbitrary markdown/HTML (CWE-79 / CWE-116). Restrict marker values
+# to a strict identifier charset — the same class the downstream parsers accept
+# (``VULN-\d{3}`` / ``[A-Za-z0-9._-]+_VULNHUNT_RESULTS_...``) — dropping any
+# other char. Removing '<' and '>' makes a comment breakout impossible while
+# keeping legitimate ids/dir-names intact.
+_MARKER_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _sanitize_marker_value(value: str) -> str:
+    """Restrict an HTML-comment marker value to a safe identifier charset so it
+    cannot break out of the surrounding ``<!-- ... -->`` (CWE-116)."""
+    return _MARKER_UNSAFE_RE.sub("", value or "")
+
+
 def _sanitize_for_issue_body(value: str) -> str:
     """Neutralize attacker-influenced Finding text before it lands in a
     GitHub issue body (CWE-79).
@@ -155,9 +173,12 @@ def render_body(
         "SCAN_DATE": report.scan_date,
         "REPORT_URL": deep_link,
         "REPORT_ACCESS_MESSAGE": _report_access_message(),
-        "IDEMPOTENCY_KEY": f.vulnfix_key,
-        "VULN_ID": f.id,
-        "RESULTS_DIR_NAME": report.results_dir_name,
+        # Marker values are NOT html.escaped (keeps the marker regexes exact)
+        # but ARE restricted to a safe identifier charset so an attacker-
+        # influenced value cannot break out of the HTML comment (CWE-116).
+        "IDEMPOTENCY_KEY": _sanitize_marker_value(f.vulnfix_key),
+        "VULN_ID": _sanitize_marker_value(f.id),
+        "RESULTS_DIR_NAME": _sanitize_marker_value(report.results_dir_name),
     }
     body = template
     for key, value in fields.items():

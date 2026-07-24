@@ -26,7 +26,36 @@ now import from this module.
 from __future__ import annotations
 
 import hashlib
+import html
 import re
+
+
+# CANON-44: residual_vectors entries are LLM/finding-derived and get
+# interpolated into the '## Residual Risk' markdown appended to the PR/issue
+# body. The hand-wave / consistency guards reject vague or empty entries but do
+# NOT escape, so an entry could carry raw HTML (``<script>``) or a markdown
+# link (``[x](javascript:...)``) into the rendered body (CWE-79 / CWE-116).
+# Neutralize each entry so metacharacters render as literal text: html.escape
+# handles angle brackets / ampersands; backslash-escaping the markdown
+# link/code metacharacters neutralizes ``[text](url)`` and inline code.
+_RESIDUAL_MD_ESCAPE_CHARS = ("\\", "`", "[", "]")
+
+
+def _escape_residual_entry(entry) -> str:
+    """Neutralize markdown/HTML metacharacters in a residual-vector entry so it
+    renders as literal text inside the '## Residual Risk' bullet list.
+
+    Each entry is rendered as a single ``- {entry}`` bullet. A raw CR/LF would
+    let the entry break out of its bullet and inject top-level markdown blocks
+    (headings, horizontal rules, fake prose), so runs of CR/LF are collapsed to
+    a single space before the angle-bracket/backtick/bracket escaping (CANON-44,
+    CWE-116 line-break injection)."""
+    s = html.escape(str(entry), quote=False)
+    for ch in _RESIDUAL_MD_ESCAPE_CHARS:
+        s = s.replace(ch, "\\" + ch)
+    # Collapse newlines so an entry cannot span multiple markdown lines.
+    s = re.sub(r"[\r\n]+", " ", s)
+    return s
 
 
 # REQ-HON-006 hand-wave regex source of truth.
@@ -136,7 +165,9 @@ def render_residual_risk_section(vuln_id, tier, residual_vectors, issue_number=N
         return ""
     check_hand_wave(residual_vectors)
 
-    bullets = "\n".join(f"- {entry}" for entry in residual_vectors)
+    bullets = "\n".join(
+        f"- {_escape_residual_entry(entry)}" for entry in residual_vectors
+    )
     one_liner = TIER_ONE_LINERS.get(tier, "not fully closed")
     issue_ref = f" (see #{issue_number})" if issue_number else ""
     return (
