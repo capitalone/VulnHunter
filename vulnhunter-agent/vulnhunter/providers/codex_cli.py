@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -15,6 +16,8 @@ from typing import Any
 from ..config import ProviderConfig
 from ..models import ModelResponse, ModelSpec, Usage
 from .base import ProviderError
+
+_PROCESS_TERMINATE_TIMEOUT_SECONDS = 5.0
 
 
 class CodexCLIProvider:
@@ -174,11 +177,7 @@ class CodexCLIProvider:
             try:
                 stdout, stderr = await process.communicate(prompt.encode("utf-8"))
             except asyncio.CancelledError:
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=5)
-                except (TimeoutError, ProcessLookupError):
-                    process.kill()
+                await _stop_process(process)
                 raise
             stdout_text = stdout.decode("utf-8", errors="replace")
             stderr_text = stderr.decode("utf-8", errors="replace")
@@ -202,8 +201,47 @@ class CodexCLIProvider:
                 content=content,
                 usage=usage,
                 finish_reason="stop",
-                raw={"executor": "codex-cli"},
+                raw={
+                    "executor": "codex-cli",
+                    "tool_events": _tool_events_from_jsonl(
+                        stdout_text, repository_root
+                    ),
+                },
             )
+
+
+async def _stop_process(process: asyncio.subprocess.Process) -> None:
+    """Stop and fully reap a cancelled Codex subprocess.
+
+    Waiting after the force-kill is important on Windows: returning while the
+    subprocess transport still owns repository handles can make snapshot
+    cleanup fail with WinError 32.
+    """
+
+    if process.returncode is not None:
+        return
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(
+            process.wait(), timeout=_PROCESS_TERMINATE_TIMEOUT_SECONDS
+        )
+    except TimeoutError:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        else:
+            await process.wait()
+    finally:
+        # communicate() was cancelled, so explicitly let asyncio drain and
+        # close its pipe transports after the child has exited.
+        try:
+            await process.communicate()
+        except (BrokenPipeError, ConnectionResetError, ProcessLookupError):
+            pass
 
 
 async def _run_capture(executable: str, *arguments: str) -> tuple[int, str]:
@@ -343,3 +381,128 @@ def _usage_from_jsonl(text: str) -> Usage:
             row.get("cached_input_tokens") or usage.cached_input_tokens
         )
     return usage
+
+
+def _tool_events_from_jsonl(
+    text: str, repository_root: Path
+) -> list[dict[str, Any]]:
+    """Normalize auditable Codex CLI JSONL activity into engine tool evidence.
+
+    Codex has changed its event envelope over time, so this accepts both the
+    current ``item.*`` shape and older direct event objects. Only completed
+    reads, searches, and commands are retained; model prose is never treated as
+    coverage evidence.
+    """
+
+    events: list[dict[str, Any]] = []
+    root = repository_root.resolve()
+    for line in text.splitlines():
+        try:
+            envelope = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(envelope, dict):
+            continue
+        event_type = str(envelope.get("type") or "")
+        item = envelope.get("item")
+        row = item if isinstance(item, dict) else envelope
+        item_type = str(row.get("type") or event_type).lower()
+        status = str(row.get("status") or "").lower()
+        if event_type.endswith(".started") or status in {"in_progress", "started"}:
+            continue
+
+        if item_type in {
+            "command_execution",
+            "command",
+            "shell_command",
+            "local_shell_call",
+        }:
+            command = row.get("command") or row.get("cmd")
+            if isinstance(command, str):
+                arguments: dict[str, Any] = {"command": command}
+            elif isinstance(command, list):
+                arguments = {"argv": [str(value) for value in command]}
+            else:
+                arguments = {}
+            events.append(
+                {
+                    "name": "run_command",
+                    "arguments": arguments,
+                    "status": status or "completed",
+                    "exit_code": row.get("exit_code"),
+                    "result_sha256": _event_result_digest(row),
+                    "source": "codex-cli-jsonl",
+                }
+            )
+            continue
+
+        paths = _event_paths(row, root)
+        if not paths:
+            continue
+        if any(marker in item_type for marker in ("search", "grep", "find")):
+            name = "search_text"
+        elif any(marker in item_type for marker in ("read", "file", "view")):
+            name = "read_file"
+        else:
+            continue
+        for path in paths:
+            events.append(
+                {
+                    "name": name,
+                    "arguments": {"path": path},
+                    "status": status or "completed",
+                    "result_sha256": _event_result_digest(row),
+                    "source": "codex-cli-jsonl",
+                }
+            )
+    return events
+
+
+def _event_paths(row: dict[str, Any], root: Path) -> list[str]:
+    raw: list[str] = []
+    for key in ("path", "file", "file_path", "filename"):
+        value = row.get(key)
+        if isinstance(value, str):
+            raw.append(value)
+    files = row.get("files")
+    if isinstance(files, list):
+        raw.extend(str(value) for value in files if isinstance(value, (str, Path)))
+    changes = row.get("changes")
+    if isinstance(changes, list):
+        for change in changes:
+            if isinstance(change, dict):
+                value = (
+                    change.get("path")
+                    or change.get("file")
+                    or change.get("file_path")
+                )
+                if isinstance(value, str):
+                    raw.append(value)
+
+    normalized: list[str] = []
+    for value in raw:
+        try:
+            candidate = Path(value)
+            resolved = (
+                candidate.resolve()
+                if candidate.is_absolute()
+                else (root / candidate).resolve()
+            )
+            relative = resolved.relative_to(root).as_posix()
+        except (OSError, ValueError):
+            continue
+        if relative not in normalized:
+            normalized.append(relative)
+    return normalized
+
+
+def _event_result_digest(row: dict[str, Any]) -> str:
+    result = (
+        row.get("aggregated_output")
+        or row.get("output")
+        or row.get("result")
+        or ""
+    )
+    return hashlib.sha256(
+        str(result).encode("utf-8", errors="replace")
+    ).hexdigest()

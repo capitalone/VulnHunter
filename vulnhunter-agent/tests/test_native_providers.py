@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +12,11 @@ from vulnhunter.config import ProviderConfig
 from vulnhunter.models import ModelSpec
 from vulnhunter.prompts import CANDIDATE_SCHEMA
 from vulnhunter.providers import ProviderError, create_provider
-from vulnhunter.providers.codex_cli import CodexCLIProvider, _openai_strict_schema
+from vulnhunter.providers.codex_cli import (
+    CodexCLIProvider,
+    _openai_strict_schema,
+    _tool_events_from_jsonl,
+)
 
 
 @pytest.mark.asyncio
@@ -306,6 +311,82 @@ async def test_codex_cli_surfaces_jsonl_model_version_error(monkeypatch, tmp_pat
         )
 
 
+@pytest.mark.asyncio
+async def test_codex_cli_cancellation_kills_and_reaps_process(
+    monkeypatch, tmp_path
+) -> None:
+    started = asyncio.Event()
+
+    class FakeProcess:
+        returncode = None
+
+        def __init__(self) -> None:
+            self.terminated = False
+            self.killed = False
+            self.wait_calls = 0
+            self.communicate_calls = 0
+
+        async def communicate(self, _prompt=None):
+            self.communicate_calls += 1
+            if self.communicate_calls == 1:
+                started.set()
+                await asyncio.Future()
+            return b"", b""
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            self.killed = True
+
+        async def wait(self) -> int:
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                await asyncio.sleep(60)
+            self.returncode = -9
+            return self.returncode
+
+    process = FakeProcess()
+
+    async def fake_subprocess(*_command, **_kwargs):
+        return process
+
+    monkeypatch.setattr("vulnhunter.providers.codex_cli.shutil.which", lambda _name: "codex")
+    monkeypatch.setattr(
+        "vulnhunter.providers.codex_cli.asyncio.create_subprocess_exec",
+        fake_subprocess,
+    )
+    monkeypatch.setattr(
+        "vulnhunter.providers.codex_cli._PROCESS_TERMINATE_TIMEOUT_SECONDS",
+        0.01,
+    )
+    provider = CodexCLIProvider(
+        ProviderConfig(name="codex", kind="codex_cli", base_url="")
+    )
+    provider.set_repository_root(tmp_path)
+    task = asyncio.create_task(
+        provider.complete(
+            model=ModelSpec(
+                alias="codex",
+                provider="codex",
+                model="gpt-test",
+                remote=True,
+            ),
+            messages=[{"role": "user", "content": "probe"}],
+            tools=[],
+        )
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert process.terminated
+    assert process.killed
+    assert process.wait_calls == 2
+    assert process.communicate_calls == 2
+
+
 def test_codex_hunt_schema_is_recursively_strict() -> None:
     schema = _openai_strict_schema(CANDIDATE_SCHEMA)
 
@@ -332,6 +413,52 @@ def test_codex_hunt_schema_is_recursively_strict() -> None:
         "description",
         "claim",
     ]
+
+
+def test_codex_cli_normalizes_auditable_tool_events(tmp_path) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    stream = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "file_read",
+                        "path": str(source / "app.py"),
+                        "output": "print('ok')",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "command_execution",
+                        "command": ["rg", "token", "app.py"],
+                        "aggregated_output": "",
+                        "exit_code": 1,
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.started",
+                    "item": {"type": "file_read", "path": "unfinished.py"},
+                }
+            ),
+        ]
+    )
+
+    events = _tool_events_from_jsonl(stream, source)
+
+    assert events[0]["name"] == "read_file"
+    assert events[0]["arguments"]["path"] == "app.py"
+    assert events[0]["source"] == "codex-cli-jsonl"
+    assert events[1]["name"] == "run_command"
+    assert events[1]["arguments"]["argv"] == ["rg", "token", "app.py"]
+    assert len(events) == 2
 
 
 @pytest.mark.asyncio

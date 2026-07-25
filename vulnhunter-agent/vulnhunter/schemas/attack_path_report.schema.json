@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VulnHunter attack path report v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "attacker_position",
+    "preconditions",
+    "boundary_crossed",
+    "assets_reached",
+    "blast_radius",
+    "compensating_controls",
+    "exploit_reliability",
+    "severity",
+    "severity_rationale",
+    "analyst"
+  ],
+  "properties": {
+    "schema_version": {"const": "2"},
+    "candidate_id": {"type": "string"},
+    "attacker_position": {"type": "string"},
+    "preconditions": {"type": "array", "items": {"type": "string"}},
+    "boundary_crossed": {"type": "string"},
+    "assets_reached": {"type": "array", "items": {"type": "string"}},
+    "blast_radius": {"type": "string"},
+    "compensating_controls": {"type": "array", "items": {"type": "string"}},
+    "exploit_reliability": {"enum": ["low", "medium", "high", "unknown"]},
+    "severity": {"enum": ["Critical", "High", "Medium", "Low"]},
+    "severity_rationale": {"type": "string"},
+    "analyst": {"type": "string"}
+  }
+}

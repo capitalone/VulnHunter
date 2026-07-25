@@ -1,16 +1,13 @@
 # VulnHunter Agent
 
-A config-driven runtime in the
+A provider-neutral security scanner and compatibility runtime in the
 [Multi-VulnHunter fork](https://github.com/JJsilvera1/Multi-VulnHunter) that
-automates the [`/vulnhunt`](https://github.com/capitalone/VulnHunter)
-scanner **headlessly** — no interactive Claude Code session required. Point it at a
-repository and it will clone the target, run the scanner, publish the results, and file
-each confirmed finding as a GitHub issue. It also has a `verify` mode that drives the
-read-only fix-verification flow.
-
-It is the automation layer around the skills: the skills define *how* to hunt and fix;
-this agent makes a scan runnable unattended (CI, a scheduled job, a fleet worker, or a
-container) and wires the results into GitHub.
+works without an interactive Claude Code session. The `vulnhunter` command is
+the canonical Python workflow engine. It snapshots a repository, creates a
+threat model and security-surface ledger, runs deterministic seeds and blind
+multi-model hunts, challenges clean results, validates candidates, analyzes
+attack paths, and writes typed artifacts. The legacy Claude Agent SDK,
+publishing, issue, and fix-verification paths remain available for compatibility.
 
 ## Standalone provider-neutral scanner
 
@@ -59,7 +56,12 @@ Interactive `vulnhunter init` configures providers and then asks, in order:
 3. Quick, Standard, Deep, or Exhaustive depth.
 4. One to three independent core models.
 5. The exact models, selected from the shared live catalog.
-6. Final confirmation: start, change the configuration, or save setup only.
+6. Static/read-only analysis or optional Docker validation of suitable
+   findings.
+7. A review of source exposure, the post-selection workflow, execution
+   permissions, artifacts, and incomplete-coverage behavior.
+8. Final confirmation: continue through preflight and scan, change the
+   configuration, or save setup only.
 
 The confirmation screen discloses every provider that receives source. The scan
 does not begin—and a remote Git target is not cloned—until the user confirms.
@@ -68,6 +70,30 @@ wizard. For later scans, `vulnhunter scan PATH` begins with two primary choices:
 
 1. Quick, Standard, Deep, or Exhaustive?
 2. How many independent core models?
+
+After model selection, the confirmation screen explains the remaining workflow:
+
+1. Resolve an immutable repository snapshot and complete provider preflight.
+2. Classify the repository and build the threat model and mandatory surface
+   ledger.
+3. Run native rules and optional installed scanners, withholding their seeds
+   from the independent blind hunters.
+4. Challenge uncovered critical surfaces, reconcile candidates, validate
+   source/control/sink claims, and analyze attack paths.
+5. Close every mandatory ledger row and write the report, manifest v2, threat
+   model, coverage, validation, and attack-path artifacts.
+
+The preflight shown after confirmation includes model health, planned work,
+estimated duration, and estimated/provider pricing where available. Scanning
+then proceeds without another ordinary wizard question. Static/read-only is the
+default; model selection never enables target execution. Explicit `--execute`
+uses Docker only. The guided `init` walkthrough offers the same choice after
+model selection. Its Change menu can revise the repository/ref, depth, model
+team and reasoning settings, or validation mode before confirmation. Optional
+static scanners run in `auto` mode when installed,
+and `--static-tools required` turns their absence into a pre-dispatch
+configuration failure. Failed assignments and unclosed mandatory surfaces
+produce `INCOMPLETE_COVERAGE`, never `COMPLETE_CLEAN`.
 
 Teams are capped at three core models. If the saved roster is larger than the
 count chosen for a scan, a short follow-up lets you choose which saved models
@@ -82,8 +108,8 @@ vulnhunter scan https://github.com/example/project.git \
   --ref v2.4.1 --level deep --models 3 --yes
 ```
 
-After the wizard asks for a team size, it queries each provider's live model
-catalog and opens a
+After the wizard asks for a team size, it queries each configured provider's
+live model catalog and opens a
 paginated, searchable model picker. Active providers share one continuously
 numbered catalog with visible dividers, so Codex CLI, local models, and
 OpenRouter choices remain distinguishable while being selectable from the same
@@ -150,25 +176,40 @@ vulnhunter scan . --verbose --log-file .\vulnhunter-progress.jsonl
 Get-Content .\vulnhunter-progress.jsonl -Wait
 ```
 
-The first-run estimate models repository partitions, hunt/sweep/review
-assignments, and repeated agent/tool turns rather than pricing the repository
-once. The compact live line groups elapsed time with ETA, actual spend with the
+The first-run estimate uses production bytes, lines, approximate callable
+symbols, security surfaces, boundary shards, reasoning effort, and expected
+hunt/review/validation tool turns rather than pricing the repository once.
+Catalog estimates account for cache-read and cache-write prices when a provider
+publishes them. OpenRouter's provider-reported billed amount still overrides
+token arithmetic. After a phase has completed assignments, its ETA is
+recalculated from the observed median assignment duration instead of continuing
+to show only the preflight window.
+
+The compact live line groups elapsed time with ETA, actual spend with the
 adaptive high estimate, and cumulative provider responses with repository tool
-calls. Live dollar amounts use two decimal places; detailed provider-response
-lines and final artifacts retain precise billing values. A warning appears if
-observed spend exceeds the original high estimate. Because candidate and review
-counts are unknowable before discovery, treat the forecast as approximate.
+calls. With `--verbose`, each assignment also logs the estimated initial prompt
+size split into the stable system prompt and dynamic task prompt. These are
+tokenizer-independent four-characters-per-token estimates; authoritative
+provider usage includes later repository-tool context and is therefore usually
+much larger. Live dollar amounts use two decimal places; detailed
+provider-response lines and final artifacts retain precise billing values. A
+warning appears if observed spend exceeds the original high estimate. Because
+candidate survival is unknowable before discovery, treat preflight forecasts as
+approximate.
 `--max-cost-usd` stops new assignment scheduling at the cap, but an
 already-running multi-turn assignment can finish slightly above it.
 
 If a model returns malformed JSON or a result that does not satisfy the required
-schema, VulnHunter makes up to three visible, tool-free repair attempts before
-marking that assignment as missing coverage. Retry usage remains included in
+schema, VulnHunter makes one constrained, tool-free schema repair attempt. If
+that still fails, it retries the complete assignment in a fresh context up to
+three times before recording missing coverage. Retry usage remains included in
 the scan's request, token, and cost totals.
 
 On the ordinary scan's second screen, enter `m` to change these defaults and
-then continue selecting the team size. Pressing Enter keeps the saved roster,
-so the normal scan still needs only the level and model-count answers.
+then choose a fresh team size of one to three models. The replacement picker
+includes every configured provider, even if that provider was not part of the
+previous active roster. Pressing Enter keeps the saved roster, so the normal
+scan still needs only the level and model-count answers.
 
 For CI:
 
@@ -271,10 +312,10 @@ Scan level and model count are independent:
 
 | Level | Behavior |
 |---|---|
-| Quick | Broad hunt plus a fresh-context falsification pass |
-| Standard | Blind independent hunts, candidate union, and ring cross-review |
-| Deep | Standard plus failed-coverage recovery and additional review for unique or severe findings |
-| Exhaustive | Deep plus every eligible reviewer, two sink/root-cause sweeps, and complete static evidence |
+| Quick | Lightweight threat model, native rules, boundary hunts, semantic reconciliation, fresh-context validation, attack-path analysis, and clean challengers for uncovered critical surfaces |
+| Standard | Quick plus independent hunts from every core model, ring review, one sink/root-cause sweep, and mandatory-surface closure |
+| Deep | Standard plus a second threat-model review, coverage-gap work, and second review for unique, disputed, severe, conditional, or configuration-dependent candidates |
+| Exhaustive | Deep plus every non-origin review, two sweeps, focused disagreement resolution, and a PoC or explicit proof gap for each surviving instance |
 
 All core models are unrestricted generalists. Add supplemental specialist
 passes with:
@@ -287,6 +328,29 @@ vulnhunter scan . --level deep --models 3 \
 
 Candidate aggregation uses the union, not majority voting. A finding discovered
 by one model can survive when another model independently confirms its evidence.
+Paraphrases that point to the same security mechanism and nearby source/sink
+locations are consolidated before review, while every concrete affected
+instance and discoverer remains attached to the grouped finding.
+
+Independent work within a phase runs concurrently up to `--max-workers`:
+boundary hunts can run together, followed by concurrent seed reviews, candidate
+reviews, validations, and attack-path assignments. Dependency barriers remain
+intentional: deterministic seeds are withheld until all blind hunts finish,
+candidate review waits for union/deduplication, and attack-path analysis waits
+for validation. Starting review as soon as one shard finishes would both waste
+work on duplicates and weaken the blind-discovery contract. Codex CLI work is
+serialized regardless of `--max-workers` because parallel `codex exec`
+processes can race the shared OAuth refresh state. OpenRouter, direct APIs, and
+healthy local servers can use parallel workers; an all-free OpenRouter team is
+paced serially to respect shared rate limits.
+
+Quick is the lowest rigor tier, not a one-request scan. Its runtime is driven by
+repository boundaries and the number of consolidated root causes that survive
+discovery. Semantic reconciliation happens before downstream work so
+differently worded descriptions do not each trigger review, validation, and
+attack-path assignments. Saved checkpoints from the legacy grouping retain
+their original candidate IDs for safe resume; new runs use the semantic-v2
+grouping automatically.
 
 ### Budgets, privacy, and execution
 
@@ -301,10 +365,79 @@ vulnhunter scan . --level deep --models 3 --yes \
 - Pricing must be configured for every selected remote model before a USD cap
   can be enforced.
 - Reaching a limit checkpoints the run and emits `INCOMPLETE_LIMIT`.
-- `--resume <results-dir>` continues completed assignments idempotently.
+- `--resume <results-dir>` reuses completed phases only when the repository
+  snapshot and methodology fingerprint still match.
 - Every tier is static and read-only by default.
-- `--execute` is rejected unless `sandbox.command_prefix` invokes an explicitly
-  configured OS/container sandbox.
+- `--execute` enables target commands only in the built-in Docker sandbox;
+  target code is never executed directly on the host.
+
+Build and diagnose the sandbox:
+
+```bash
+vulnhunter sandbox doctor
+vulnhunter sandbox build
+vulnhunter scan . --level deep --models 2 --execute
+```
+
+When `--execute` is selected, VulnHunter checks Docker before repository or
+provider work begins. If Docker Desktop is installed but stopped, an interactive
+scan offers to start it and waits for the engine. In automation, start it
+explicitly with:
+
+```bash
+vulnhunter scan . --level deep --models 2 --execute --start-docker --yes
+```
+
+If the daemon is running but the versioned sandbox image is missing, VulnHunter
+stops before model dispatch and tells you to run `vulnhunter sandbox build`.
+If Docker is not installed, it reports that separately.
+
+The sandbox mounts the source read-only, uses a disposable work copy, runs
+non-root with dropped capabilities and `no-new-privileges`, applies CPU,
+memory, PID, time, and output bounds, mounts no credentials or Docker socket,
+and disables networking by default. Command output is redacted and written to
+`validation_artifacts/`.
+
+Provider-managed agents such as Codex CLI do not execute these commands
+directly. They may propose a bounded argument-array reproduction during a
+validation assignment; VulnHunter executes it through the engine-owned Docker
+sandbox, records the redacted result, and returns that evidence to a fresh model
+turn for the final verdict. This keeps provider tooling separate from execution
+authority.
+
+Optional static scanners can supplement the dependency-free native rules:
+
+```bash
+vulnhunter scan . --static-tools auto
+vulnhunter scan . --static-tools required
+```
+
+Semgrep, Gitleaks, Trivy, and ast-grep output is treated as investigation
+seeds, never as an automatic final finding. `required` fails preflight when an
+expected tool is unavailable.
+
+### Manifest v2 and compatibility
+
+The native engine emits strict `run_manifest.json` schema version `2` plus:
+
+- `threat_model.json` / `threat_model.md`
+- `security_surfaces.jsonl` / `coverage_ledger.jsonl`
+- `static_seeds.jsonl`
+- per-candidate `validation/` and `attack_paths/` artifacts
+- sandbox logs under `validation_artifacts/`
+- a human-readable results `README.md`
+
+Candidate verdict and final disposition are separate. Dispositions are
+`REPORTABLE`, `DEFERRED`, `SUPPRESSED`, `NOT_APPLICABLE`, and `UNRESOLVED`.
+Only `REPORTABLE` findings are projected into legacy `scan_manifest.json` v1.
+An incomplete, conditional, unresolved, or failed v2 run maps to the legacy
+failure state so a v1 consumer cannot report it as clean.
+
+The transition engine remains available for Git URLs:
+
+```bash
+vulnhunter scan https://github.com/example/project --engine legacy
+```
 
 ### Coding-tool walkthroughs
 

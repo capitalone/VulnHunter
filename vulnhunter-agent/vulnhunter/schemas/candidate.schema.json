@@ -7,7 +7,7 @@
     "candidate_id", "title", "classification", "severity", "cwe",
     "source", "sink", "trace", "root_cause", "attacker_prerequisites",
     "new_capability", "contradicting_evidence", "fix_strategy",
-    "discovered_by", "verdict", "reviews"
+    "discovered_by", "verdict", "disposition", "reviews"
   ],
   "properties": {
     "candidate_id": {"type": "string", "pattern": "^CAND-[0-9]{5}$"},
@@ -23,9 +23,24 @@
     "new_capability": {"type": "string"},
     "contradicting_evidence": {"type": "array", "items": {"type": "string"}},
     "fix_strategy": {"type": "string"},
+    "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "affected_resource": {"type": "string"},
+    "security_boundary": {"type": "string"},
+    "closest_control": {"type": "object"},
+    "reachable_path": {"type": "array", "items": {"type": "object"}},
+    "proof_gaps": {"type": "array", "items": {"type": "string"}},
+    "affected_instances": {"type": "array", "items": {"type": "object"}},
+    "poc": {"type": "string"},
+    "exploit_test": {"type": "string"},
     "discovered_by": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+    "duplicate_candidate_ids": {"type": "array", "items": {"type": "string"}},
     "verdict": {"enum": ["CONFIRMED", "REJECTED", "CONDITIONAL", "UNRESOLVED"]},
-    "reviews": {"type": "array", "items": {"type": "string"}}
+    "disposition": {
+      "enum": ["REPORTABLE", "DEFERRED", "SUPPRESSED", "NOT_APPLICABLE", "UNRESOLVED"]
+    },
+    "reviews": {"type": "array", "items": {"type": "string"}},
+    "validation": {"type": "object"},
+    "attack_path": {"type": "object"}
   },
-  "additionalProperties": true
+  "additionalProperties": false
 }

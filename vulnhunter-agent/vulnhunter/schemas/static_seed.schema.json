@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VulnHunter deterministic seed v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "seed_id",
+    "rule_id",
+    "title",
+    "classification",
+    "severity",
+    "cwe",
+    "file",
+    "line",
+    "source",
+    "closest_control",
+    "sink",
+    "impact",
+    "evidence",
+    "confidence",
+    "tool"
+  ],
+  "properties": {
+    "schema_version": {"const": "2"},
+    "seed_id": {"type": "string"},
+    "rule_id": {"type": "string"},
+    "title": {"type": "string"},
+    "classification": {"type": "string"},
+    "severity": {"enum": ["Critical", "High", "Medium", "Low"]},
+    "cwe": {"type": "string"},
+    "file": {"type": "string"},
+    "line": {"type": "integer", "minimum": 1},
+    "source": {"type": "string"},
+    "closest_control": {"type": "string"},
+    "sink": {"type": "string"},
+    "impact": {"type": "string"},
+    "evidence": {"type": "array", "items": {"type": "object"}},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "tool": {"type": "string"}
+  }
+}

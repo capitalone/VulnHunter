@@ -52,6 +52,8 @@ clones/
 verify_runs/
 config.toml
 config.models.json
+scan-evals/
+scanlogs*.txt
 
 # vulnhunter-fix runtime/work dirs (generated locally, never committed)
 work/

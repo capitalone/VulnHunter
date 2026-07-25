@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/capitalone/vulnhunter/run_manifest.schema.json",
-  "title": "Provider-neutral VulnHunter run manifest",
+  "$id": "https://github.com/JJsilvera1/Multi-VulnHunter/run_manifest.schema.json",
+  "title": "VulnHunter run manifest v2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -15,13 +15,63 @@
     "usage",
     "limits",
     "coverage",
+    "phases",
+    "threat_model",
+    "security_surfaces",
+    "tooling",
+    "sandbox",
+    "dispositions",
     "assignments",
     "findings",
     "reviews",
     "incomplete_reason"
   ],
+  "$defs": {
+    "phase_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "completed", "failed", "pending", "prompt_hashes"],
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "completed": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "pending": {"type": "integer", "minimum": 0},
+        "prompt_hashes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "cached_input_tokens",
+        "cache_write_tokens",
+        "requests",
+        "rate_limit_retries",
+        "cost_usd",
+        "cost_source",
+        "duration_seconds"
+      ],
+      "properties": {
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "cached_input_tokens": {"type": "integer", "minimum": 0},
+        "cache_write_tokens": {"type": "integer", "minimum": 0},
+        "requests": {"type": "integer", "minimum": 0},
+        "rate_limit_retries": {"type": "integer", "minimum": 0},
+        "cost_usd": {"type": ["number", "null"], "minimum": 0},
+        "cost_source": {"enum": ["unknown", "provider", "estimate", "mixed"]},
+        "duration_seconds": {"type": "number", "minimum": 0}
+      }
+    }
+  },
   "properties": {
-    "schema_version": {"const": "1"},
+    "schema_version": {"const": "2"},
     "run_id": {"type": "string", "minLength": 1},
     "status": {
       "enum": [
@@ -34,15 +84,194 @@
         "FAILED"
       ]
     },
-    "repository": {"type": "object"},
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "name",
+        "url",
+        "commit",
+        "branch",
+        "dirty",
+        "snapshot_digest",
+        "files",
+        "production_files",
+        "dormant_files",
+        "support_files",
+        "bytes",
+        "languages"
+      ],
+      "properties": {
+        "path": {"type": "string"},
+        "name": {"type": "string"},
+        "url": {"type": "string"},
+        "commit": {"type": "string"},
+        "branch": {"type": "string"},
+        "dirty": {"type": "boolean"},
+        "snapshot_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "files": {"type": "integer", "minimum": 0},
+        "production_files": {"type": "integer", "minimum": 0},
+        "dormant_files": {"type": "integer", "minimum": 0},
+        "support_files": {"type": "integer", "minimum": 0},
+        "bytes": {"type": "integer", "minimum": 0},
+        "lines": {"type": "integer", "minimum": 0},
+        "symbols": {"type": "integer", "minimum": 0},
+        "languages": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
     "level": {"enum": ["quick", "standard", "deep", "exhaustive"]},
-    "models": {"type": "array", "minItems": 1, "items": {"type": "object"}},
-    "specialists": {"type": "array", "items": {"type": "object"}},
-    "usage": {"type": "object"},
-    "limits": {"type": "object"},
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "alias",
+          "provider",
+          "model",
+          "remote",
+          "tool_mode",
+          "reasoning_effort",
+          "context_tokens"
+        ],
+        "properties": {
+          "alias": {"type": "string"},
+          "provider": {"type": "string"},
+          "model": {"type": "string"},
+          "remote": {"type": "boolean"},
+          "tool_mode": {"enum": ["native", "json"]},
+          "reasoning_effort": {"type": "string"},
+          "context_tokens": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "specialists": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["profile", "model_alias", "prompt", "enabled"],
+        "properties": {
+          "profile": {"type": "string"},
+          "model_alias": {"type": "string"},
+          "prompt": {"type": "string"},
+          "enabled": {"type": "boolean"}
+        }
+      }
+    },
+    "usage": {"$ref": "#/$defs/usage"},
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_cost_usd",
+        "max_tokens",
+        "max_duration_seconds",
+        "max_workers"
+      ],
+      "properties": {
+        "max_cost_usd": {"type": ["number", "null"], "minimum": 0},
+        "max_tokens": {"type": ["integer", "null"], "minimum": 1},
+        "max_duration_seconds": {"type": ["number", "null"], "minimum": 0},
+        "max_workers": {"type": "integer", "minimum": 1}
+      }
+    },
     "coverage": {"type": "object"},
+    "phases": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/phase_counts"}
+    },
+    "threat_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "markdown_path", "repository_digest", "complete"],
+      "properties": {
+        "path": {"const": "threat_model.json"},
+        "markdown_path": {"const": "threat_model.md"},
+        "repository_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "complete": {"type": "boolean"}
+      }
+    },
+    "security_surfaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "mandatory",
+        "unresolved_mandatory",
+        "path",
+        "coverage_ledger_path",
+        "instance_rows"
+      ],
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "mandatory": {"type": "integer", "minimum": 0},
+        "unresolved_mandatory": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        },
+        "path": {"const": "security_surfaces.jsonl"},
+        "coverage_ledger_path": {"const": "coverage_ledger.jsonl"},
+        "instance_rows": {"type": "integer", "minimum": 0}
+      }
+    },
+    "tooling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "native_rules",
+        "native_seed_count",
+        "optional_mode",
+        "optional_tools",
+        "seed_path"
+      ],
+      "properties": {
+        "native_rules": {"type": "boolean"},
+        "native_seed_count": {"type": "integer", "minimum": 0},
+        "optional_mode": {"enum": ["auto", "off", "required"]},
+        "optional_tools": {"type": "object"},
+        "seed_path": {"const": "static_seeds.jsonl"}
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "backend", "image", "network"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "backend": {"const": "docker"},
+        "image": {"type": "string"},
+        "network": {"enum": ["none", "internet", "private"]}
+      }
+    },
+    "dispositions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "REPORTABLE",
+        "DEFERRED",
+        "SUPPRESSED",
+        "NOT_APPLICABLE",
+        "UNRESOLVED"
+      ],
+      "properties": {
+        "REPORTABLE": {"type": "integer", "minimum": 0},
+        "DEFERRED": {"type": "integer", "minimum": 0},
+        "SUPPRESSED": {"type": "integer", "minimum": 0},
+        "NOT_APPLICABLE": {"type": "integer", "minimum": 0},
+        "UNRESOLVED": {"type": "integer", "minimum": 0}
+      }
+    },
     "assignments": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["total", "completed", "failed", "pending"],
       "properties": {
         "total": {"type": "integer", "minimum": 0},
@@ -51,7 +280,46 @@
         "pending": {"type": "integer", "minimum": 0}
       }
     },
-    "findings": {"type": "array", "items": {"type": "object"}},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "candidate_id",
+          "title",
+          "severity",
+          "cwe",
+          "verdict",
+          "disposition",
+          "discovered_by",
+          "reviews",
+          "validation_path",
+          "attack_path"
+        ],
+        "properties": {
+          "candidate_id": {"type": "string"},
+          "title": {"type": "string"},
+          "severity": {"enum": ["Critical", "High", "Medium", "Low"]},
+          "cwe": {"type": "string"},
+          "verdict": {
+            "enum": ["CONFIRMED", "REJECTED", "CONDITIONAL", "UNRESOLVED"]
+          },
+          "disposition": {
+            "enum": [
+              "REPORTABLE",
+              "DEFERRED",
+              "NOT_APPLICABLE",
+              "UNRESOLVED"
+            ]
+          },
+          "discovered_by": {"type": "array", "items": {"type": "object"}},
+          "reviews": {"type": "array", "items": {"type": "string"}},
+          "validation_path": {"type": ["string", "null"]},
+          "attack_path": {"type": ["string", "null"]}
+        }
+      }
+    },
     "reviews": {"type": "integer", "minimum": 0},
     "incomplete_reason": {"type": "string"}
   }

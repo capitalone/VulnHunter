@@ -342,7 +342,28 @@ def _cost(model: ModelSpec, usage: Usage) -> float | None:
         or model.output_cost_per_million is None
     ):
         return None
+    cached = min(usage.cached_input_tokens, usage.input_tokens)
+    written = min(
+        usage.cache_write_tokens, max(0, usage.input_tokens - cached)
+    )
+    if model.cache_read_cost_per_million is None:
+        cached = 0
+    if model.cache_write_cost_per_million is None:
+        written = 0
+    regular = max(0, usage.input_tokens - cached - written)
     return (
-        usage.input_tokens * model.input_cost_per_million
+        regular * model.input_cost_per_million
+        + cached
+        * (
+            model.cache_read_cost_per_million
+            if model.cache_read_cost_per_million is not None
+            else model.input_cost_per_million
+        )
+        + written
+        * (
+            model.cache_write_cost_per_million
+            if model.cache_write_cost_per_million is not None
+            else model.input_cost_per_million
+        )
         + usage.output_tokens * model.output_cost_per_million
     ) / 1_000_000

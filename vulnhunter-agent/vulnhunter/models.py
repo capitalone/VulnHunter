@@ -25,9 +25,14 @@ class RunStatus(StrEnum):
 
 
 class AssignmentKind(StrEnum):
+    THREAT_MODEL = "threat_model"
     HUNT = "hunt"
     SPECIALIST = "specialist"
+    SEED_REVIEW = "seed_review"
+    CLEAN_CHALLENGE = "clean_challenge"
     REVIEW = "review"
+    VALIDATE = "validate"
+    ATTACK_PATH = "attack_path"
     RESOLVE = "resolve"
     SWEEP = "sweep"
 
@@ -36,6 +41,14 @@ class Verdict(StrEnum):
     CONFIRMED = "CONFIRMED"
     REJECTED = "REJECTED"
     CONDITIONAL = "CONDITIONAL"
+    UNRESOLVED = "UNRESOLVED"
+
+
+class FindingDisposition(StrEnum):
+    REPORTABLE = "REPORTABLE"
+    DEFERRED = "DEFERRED"
+    SUPPRESSED = "SUPPRESSED"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
     UNRESOLVED = "UNRESOLVED"
 
 
@@ -62,6 +75,8 @@ class ModelSpec:
     billing_label: str = ""
     input_cost_per_million: float | None = None
     output_cost_per_million: float | None = None
+    cache_read_cost_per_million: float | None = None
+    cache_write_cost_per_million: float | None = None
     hourly_hardware_cost: float | None = None
     capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
 
@@ -163,12 +178,19 @@ class Candidate:
     confidence: float | None = None
     affected_resource: str = ""
     security_boundary: str = ""
+    closest_control: dict[str, Any] = field(default_factory=dict)
+    reachable_path: list[dict[str, Any]] = field(default_factory=list)
+    proof_gaps: list[str] = field(default_factory=list)
+    affected_instances: list[dict[str, Any]] = field(default_factory=list)
     poc: str = ""
     exploit_test: str = ""
     discovered_by: list[dict[str, str]] = field(default_factory=list)
     duplicate_candidate_ids: list[str] = field(default_factory=list)
     verdict: str = Verdict.UNRESOLVED
+    disposition: str = FindingDisposition.UNRESOLVED
     reviews: list[str] = field(default_factory=list)
+    validation: dict[str, Any] = field(default_factory=dict)
+    attack_path: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -213,6 +235,9 @@ class Assignment:
     status: str = "PENDING"
     error: str = ""
     usage: Usage = field(default_factory=Usage)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    coverage_quality: str = "self_reported"
+    context: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -236,5 +261,11 @@ class ScanRequest:
     specialists: list[SpecialistSpec] = field(default_factory=list)
     limits: ScanLimits = field(default_factory=ScanLimits)
     execute: bool = False
+    include_dormant: bool = False
+    static_tools: str = "auto"
+    allow_network: bool = False
+    allow_private_network: bool = False
+    threat_model_path: str | None = None
+    sandbox_image: str | None = None
     results_dir: str | None = None
     resume: bool = False

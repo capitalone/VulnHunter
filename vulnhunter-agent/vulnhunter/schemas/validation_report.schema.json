@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VulnHunter candidate validation report v2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "verdict",
+    "disposition",
+    "method",
+    "source_reachable",
+    "attacker_controlled",
+    "blocking_control_found",
+    "impact_proven",
+    "evidence",
+    "counterevidence",
+    "proof_gaps",
+    "rationale",
+    "validator",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {"const": "2"},
+    "candidate_id": {"type": "string"},
+    "verdict": {"enum": ["CONFIRMED", "REJECTED", "CONDITIONAL", "UNRESOLVED"]},
+    "disposition": {"enum": ["REPORTABLE", "DEFERRED", "SUPPRESSED", "UNRESOLVED"]},
+    "method": {"type": "string"},
+    "source_reachable": {"type": ["boolean", "null"]},
+    "attacker_controlled": {"type": ["boolean", "null"]},
+    "blocking_control_found": {"type": ["boolean", "null"]},
+    "impact_proven": {"type": ["boolean", "null"]},
+    "evidence": {"type": "array", "items": {"type": "object"}},
+    "counterevidence": {"type": "array", "items": {"type": "string"}},
+    "proof_gaps": {"type": "array", "items": {"type": "string"}},
+    "rationale": {"type": "string"},
+    "recommended_severity": {"type": ["string", "null"]},
+    "validator": {"type": "object"},
+    "artifacts": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

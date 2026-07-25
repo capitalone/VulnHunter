@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import json
+import shutil
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -32,11 +33,18 @@ class ProviderConfig:
 
 @dataclass(frozen=True)
 class SandboxConfig:
+    backend: str = "docker"
+    image: str = "vulnhunter-sandbox:0.3.0"
+    memory: str = "2g"
+    cpus: float = 2.0
+    pids_limit: int = 256
+    # Parsed only so one transition release can read older config files. The
+    # native engine never executes this host-side prefix.
     command_prefix: tuple[str, ...] = ()
 
     @property
     def available(self) -> bool:
-        return bool(self.command_prefix)
+        return self.backend == "docker" and shutil.which("docker") is not None
 
 
 @dataclass(frozen=True)
@@ -155,6 +163,8 @@ def save_additional_model(config: EngineConfig, model: ModelSpec) -> Path:
             "context_tokens": model.context_tokens,
             "input_cost_per_million": model.input_cost_per_million,
             "output_cost_per_million": model.output_cost_per_million,
+            "cache_read_cost_per_million": model.cache_read_cost_per_million,
+            "cache_write_cost_per_million": model.cache_write_cost_per_million,
             "reasoning_effort": model.reasoning_effort,
             "supported_reasoning_efforts": list(model.supported_reasoning_efforts),
             "billing_label": model.billing_label,
@@ -190,6 +200,8 @@ def save_model_roster(config: EngineConfig, roster: list[ModelSpec]) -> Path:
             "context_tokens": model.context_tokens,
             "input_cost_per_million": model.input_cost_per_million,
             "output_cost_per_million": model.output_cost_per_million,
+            "cache_read_cost_per_million": model.cache_read_cost_per_million,
+            "cache_write_cost_per_million": model.cache_write_cost_per_million,
             "reasoning_effort": model.reasoning_effort,
         }
         metadata[model.alias] = {
@@ -207,6 +219,8 @@ def save_model_roster(config: EngineConfig, roster: list[ModelSpec]) -> Path:
                 "context_tokens": model.context_tokens,
                 "input_cost_per_million": model.input_cost_per_million,
                 "output_cost_per_million": model.output_cost_per_million,
+                "cache_read_cost_per_million": model.cache_read_cost_per_million,
+                "cache_write_cost_per_million": model.cache_write_cost_per_million,
                 "reasoning_effort": model.reasoning_effort,
                 "supported_reasoning_efforts": list(
                     model.supported_reasoning_efforts
@@ -330,6 +344,12 @@ def parse_engine_config(
             output_cost_per_million=_optional_float(
                 row.get("output_cost_per_million")
             ),
+            cache_read_cost_per_million=_optional_float(
+                row.get("cache_read_cost_per_million")
+            ),
+            cache_write_cost_per_million=_optional_float(
+                row.get("cache_write_cost_per_million")
+            ),
             hourly_hardware_cost=_optional_float(row.get("hourly_hardware_cost")),
             capabilities=ModelCapabilities(
                 native_tools=bool(row.get("native_tools", tool_mode == "native")),
@@ -371,7 +391,24 @@ def parse_engine_config(
     prefix = sandbox_raw.get("command_prefix", []) if isinstance(sandbox_raw, dict) else []
     if isinstance(prefix, str):
         raise ValueError("sandbox.command_prefix must be an array of command arguments")
-    sandbox = SandboxConfig(command_prefix=tuple(str(part) for part in prefix))
+    sandbox = SandboxConfig(
+        backend=str(sandbox_raw.get("backend", "docker"))
+        if isinstance(sandbox_raw, dict)
+        else "docker",
+        image=str(sandbox_raw.get("image", "vulnhunter-sandbox:0.3.0"))
+        if isinstance(sandbox_raw, dict)
+        else "vulnhunter-sandbox:0.3.0",
+        memory=str(sandbox_raw.get("memory", "2g"))
+        if isinstance(sandbox_raw, dict)
+        else "2g",
+        cpus=float(sandbox_raw.get("cpus", 2.0))
+        if isinstance(sandbox_raw, dict)
+        else 2.0,
+        pids_limit=int(sandbox_raw.get("pids_limit", 256))
+        if isinstance(sandbox_raw, dict)
+        else 256,
+        command_prefix=tuple(str(part) for part in prefix),
+    )
     return EngineConfig(
         providers=providers,
         models=models,
@@ -463,6 +500,28 @@ def _apply_saved_model_defaults(config: EngineConfig) -> EngineConfig:
                         else None
                     )
                 ),
+                cache_read_cost_per_million=(
+                    float(saved_metadata[alias]["cache_read_cost_per_million"])
+                    if isinstance(saved_metadata.get(alias), dict)
+                    and saved_metadata[alias].get("cache_read_cost_per_million")
+                    is not None
+                    else (
+                        current.cache_read_cost_per_million
+                        if normalized == current.model
+                        else None
+                    )
+                ),
+                cache_write_cost_per_million=(
+                    float(saved_metadata[alias]["cache_write_cost_per_million"])
+                    if isinstance(saved_metadata.get(alias), dict)
+                    and saved_metadata[alias].get("cache_write_cost_per_million")
+                    is not None
+                    else (
+                        current.cache_write_cost_per_million
+                        if normalized == current.model
+                        else None
+                    )
+                ),
                 reasoning_effort=str(
                     saved_metadata.get(alias, {}).get(
                         "reasoning_effort", current.reasoning_effort
@@ -511,6 +570,16 @@ def _apply_saved_model_defaults(config: EngineConfig) -> EngineConfig:
             output_cost_per_million=(
                 float(row["output_cost_per_million"])
                 if row.get("output_cost_per_million") is not None
+                else None
+            ),
+            cache_read_cost_per_million=(
+                float(row["cache_read_cost_per_million"])
+                if row.get("cache_read_cost_per_million") is not None
+                else None
+            ),
+            cache_write_cost_per_million=(
+                float(row["cache_write_cost_per_million"])
+                if row.get("cache_write_cost_per_million") is not None
                 else None
             ),
             reasoning_effort=str(row.get("reasoning_effort", template.reasoning_effort)),

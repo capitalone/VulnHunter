@@ -1,0 +1,17 @@
+rules:
+  - id: vulnhunter-shell-true
+    message: Subprocess invocation enables shell parsing
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.run(..., shell=True, ...)
+          - pattern: subprocess.Popen(..., shell=True, ...)
+          - pattern: subprocess.call(..., shell=True, ...)
+  - id: vulnhunter-unsafe-pickle
+    message: Untrusted pickle deserialization may execute code
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: pickle.load(...)
+      - pattern: pickle.loads(...)

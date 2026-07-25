@@ -8,16 +8,31 @@ from typing import Any
 import pytest
 
 from vulnhunter.config import ProviderConfig, parse_engine_config
-from vulnhunter.engine import ScanEngine, _await_provider_response, estimate_scan
+from vulnhunter.engine import (
+    ScanEngine,
+    _add_safe_schema_defaults,
+    _await_provider_response,
+    _normalized_tool_evidence,
+    _partition_limits,
+    _provider_error_retryable,
+    _prune_schema_extras,
+    estimate_model_cost,
+    estimate_scan,
+    merge_candidates,
+)
 from vulnhunter.inventory import build_inventory
 from vulnhunter.models import (
+    Assignment,
+    Candidate,
     ModelSpec,
     ModelResponse,
     ScanLevel,
     ScanLimits,
     ScanRequest,
     Usage,
+    ToolCall,
 )
+from vulnhunter.prompts import CANDIDATE_SCHEMA, VALIDATION_SCHEMA
 from vulnhunter.providers import ProviderError
 
 
@@ -48,7 +63,48 @@ class FakeProvider:
     ) -> ModelResponse:
         self.calls += 1
         text = "\n".join(str(row.get("content", "")) for row in messages)
-        if "Independently falsify" in text:
+        if "Build a concise repository-scoped security threat model" in text:
+            payload = {
+                "product_surfaces": ["test service"],
+                "actors": ["remote user"],
+                "external_entrypoints": ["HTTP request"],
+                "privileged_workflows": ["account lookup"],
+                "assets": ["account data"],
+                "dependency_attackers": [],
+                "trust_boundaries": ["request to account lookup"],
+                "security_invariants": ["accounts are tenant scoped"],
+                "external_controls": [],
+                "proof_gaps": [],
+            }
+        elif "Validate the candidate" in text:
+            payload = {
+                "verdict": "CONFIRMED",
+                "disposition": "REPORTABLE",
+                "method": "static source/control/sink trace",
+                "source_reachable": True,
+                "attacker_controlled": True,
+                "blocking_control_found": False,
+                "impact_proven": True,
+                "evidence": [{"file": "app.py", "line": 1}],
+                "counterevidence": [],
+                "proof_gaps": [],
+                "rationale": "The unscoped lookup is reachable.",
+                "recommended_severity": "High",
+                "sandbox_commands": [],
+            }
+        elif "Calibrate the validated candidate's attack path" in text:
+            payload = {
+                "attacker_position": "authenticated user",
+                "preconditions": ["know another account id"],
+                "boundary_crossed": "tenant boundary",
+                "assets_reached": ["another account"],
+                "blast_radius": "one selected account",
+                "compensating_controls": [],
+                "exploit_reliability": "high",
+                "severity": "High",
+                "severity_rationale": "Cross-tenant read.",
+            }
+        elif "Independently falsify" in text:
             payload = {
                 "verdict": "CONFIRMED",
                 "source_reachable": True,
@@ -98,6 +154,45 @@ class FakeProvider:
         )
 
 
+def test_quick_uses_context_aware_tool_shards() -> None:
+    assert _partition_limits(ScanLevel.QUICK, 259_000) == (750_000, 40)
+    assert _partition_limits(ScanLevel.STANDARD, 259_000) == (200_000, 15)
+
+
+def test_successful_codex_read_command_closes_only_named_paths() -> None:
+    expected = ["src/auth.ts", "src/other.ts"]
+    calls = [
+        {
+            "name": "run_command",
+            "arguments": {
+                "command": (
+                    "$files=@('src/auth.ts'); foreach($f in $files) "
+                    "{ Get-Content -LiteralPath $f }"
+                )
+            },
+            "status": "completed",
+            "exit_code": 0,
+            "result_sha256": "abc",
+        },
+        {
+            "name": "run_command",
+            "arguments": {"command": "Get-Content src/other.ts"},
+            "status": "failed",
+            "exit_code": 1,
+            "result_sha256": "def",
+        },
+    ]
+
+    evidence = _normalized_tool_evidence(calls, expected)
+
+    credited = {
+        row["path"]
+        for row in evidence
+        if row["tool"] == "run_command_path"
+    }
+    assert credited == {"src/auth.ts"}
+
+
 class RateLimitedOnceProvider(FakeProvider):
     async def complete(self, **kwargs: Any) -> ModelResponse:
         if self.calls == 0:
@@ -121,6 +216,293 @@ class InvalidContractProvider(FakeProvider):
                 cost_source="provider",
             ),
         )
+
+
+class ToolThenMalformedProvider(FakeProvider):
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.message_batches: list[list[dict[str, Any]]] = []
+
+    async def complete(self, **kwargs: Any) -> ModelResponse:
+        self.calls += 1
+        messages = kwargs["messages"]
+        self.message_batches.append(messages)
+        if self.calls == 1:
+            return ModelResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="read-1",
+                        name="read_file",
+                        arguments={"path": "app.py"},
+                    )
+                ],
+                usage=Usage(requests=1),
+            )
+        if self.calls == 2:
+            return ModelResponse(
+                content=json.dumps(
+                    {
+                        "coverage": {
+                            "files_reviewed": ["app.py"],
+                            "unresolved_files": [],
+                            "notes": "",
+                        }
+                    }
+                ),
+                usage=Usage(requests=1),
+            )
+        return ModelResponse(
+            content=json.dumps(
+                {
+                    "candidates": [],
+                    "coverage": {
+                        "files_reviewed": ["app.py"],
+                        "unresolved_files": [],
+                        "notes": "",
+                    },
+                }
+            ),
+            usage=Usage(requests=1),
+        )
+
+
+class DuplicateToolProvider(FakeProvider):
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.final_messages: list[dict[str, Any]] = []
+
+    async def complete(self, **kwargs: Any) -> ModelResponse:
+        self.calls += 1
+        if self.calls <= 2:
+            return ModelResponse(
+                tool_calls=[
+                    ToolCall(
+                        id=f"read-{self.calls}",
+                        name="read_file",
+                        arguments={"path": "app.py"},
+                    )
+                ],
+                usage=Usage(requests=1),
+            )
+        self.final_messages = kwargs["messages"]
+        return ModelResponse(
+            content=json.dumps(
+                {
+                    "candidates": [],
+                    "coverage": {
+                        "files_reviewed": ["app.py"],
+                        "unresolved_files": [],
+                        "notes": "",
+                    },
+                }
+            ),
+            usage=Usage(requests=1),
+        )
+
+
+def test_schema_cleanup_only_removes_extras_and_adds_coverage_notes() -> None:
+    payload = {
+        "candidates": [],
+        "coverage": {
+            "files_reviewed": ["app.py"],
+            "unresolved_files": [],
+            "summary": "not part of the contract",
+        },
+        "summary": "also not part of the contract",
+    }
+
+    _prune_schema_extras(payload, CANDIDATE_SCHEMA)
+    _add_safe_schema_defaults(payload, CANDIDATE_SCHEMA)
+
+    assert payload == {
+        "candidates": [],
+        "coverage": {
+            "files_reviewed": ["app.py"],
+            "unresolved_files": [],
+            "notes": "",
+        },
+    }
+
+
+def test_coverage_keeps_out_of_shard_paths_supplemental() -> None:
+    assignment = Assignment(
+        assignment_id="hunt-1",
+        kind="hunt",
+        model_alias="model-a",
+        files=[".github/workflows/deploy.yml", "app.py"],
+    )
+    payload = {
+        "coverage": {
+            "files_reviewed": [
+                "github/workflows/deploy.yml",
+                "related.py",
+            ],
+            "unresolved_files": [],
+            "notes": "",
+        },
+        "_provenance": {"tool_calls": []},
+    }
+
+    ScanEngine._normalize_assignment_coverage(assignment, payload)
+
+    assert payload["coverage"]["files_reviewed"] == [
+        ".github/workflows/deploy.yml"
+    ]
+    assert payload["coverage"]["unresolved_files"] == ["app.py"]
+    supplemental = next(
+        row
+        for row in assignment.evidence
+        if row.get("tool") == "supplemental_coverage_claim"
+    )
+    assert supplemental["paths"] == ["related.py"]
+    assert assignment.coverage_quality == "self_reported"
+
+
+@pytest.mark.asyncio
+async def test_schema_repair_does_not_resend_repository_tool_transcript(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "app.py").write_text("print('hello')\n")
+    provider = ToolThenMalformedProvider("one")
+    config = _config()
+    engine = ScanEngine(config, providers={"one": provider, "two": FakeProvider("two")})
+
+    payload, usage = await engine._tool_loop(
+        config.models["model-a"],
+        root=tmp_path,
+        allowed_files={"app.py"},
+        user_prompt="Audit app.py",
+        schema=CANDIDATE_SCHEMA,
+        execute=False,
+    )
+
+    assert payload["candidates"] == []
+    assert usage.requests == 3
+    repair_messages = provider.message_batches[2]
+    assert len(repair_messages) == 2
+    assert {row["role"] for row in repair_messages} == {"system", "user"}
+    assert "print('hello')" not in str(repair_messages)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_tool_result_is_not_retransmitted(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("print('unique-tool-content')\n")
+    provider = DuplicateToolProvider("one")
+    config = _config()
+    events: list[tuple[str, dict[str, Any]]] = []
+    engine = ScanEngine(
+        config,
+        providers={"one": provider, "two": FakeProvider("two")},
+        progress=lambda event, details: events.append((event, details)),
+    )
+
+    await engine._tool_loop(
+        config.models["model-a"],
+        root=tmp_path,
+        allowed_files={"app.py"},
+        user_prompt="Audit app.py",
+        schema=CANDIDATE_SCHEMA,
+        execute=False,
+    )
+
+    tool_messages = [
+        str(row["content"])
+        for row in provider.final_messages
+        if row["role"] == "tool"
+    ]
+    assert sum("unique-tool-content" in content for content in tool_messages) == 1
+    assert any('"duplicate": true' in content for content in tool_messages)
+    assert any(event == "duplicate_tool_call" for event, _details in events)
+
+
+@pytest.mark.asyncio
+async def test_provider_managed_validation_commands_run_in_engine_docker(
+    monkeypatch, tmp_path: Path
+) -> None:
+    (tmp_path / "app.py").write_text("print('fixture')\n", encoding="utf-8")
+
+    class ManagedProvider(FakeProvider):
+        manages_repository_tools = True
+
+        async def complete(self, **kwargs) -> ModelResponse:
+            self.calls += 1
+            messages = kwargs["messages"]
+            received_results = "Sandbox execution results" in str(messages)
+            payload = {
+                "verdict": "CONFIRMED",
+                "disposition": "REPORTABLE",
+                "method": (
+                    "Docker reproduction passed"
+                    if received_results
+                    else "provisional static trace"
+                ),
+                "source_reachable": True,
+                "attacker_controlled": True,
+                "blocking_control_found": False,
+                "impact_proven": True,
+                "evidence": [{"file": "app.py", "line": 1}],
+                "counterevidence": [],
+                "proof_gaps": [],
+                "rationale": "Runtime proof returned by the engine.",
+                "recommended_severity": "High",
+                "sandbox_commands": (
+                    []
+                    if received_results
+                    else [
+                        {
+                            "argv": ["python", "-m", "unittest", "-v"],
+                            "timeout_seconds": 30,
+                        }
+                    ]
+                ),
+            }
+            return ModelResponse(
+                content=json.dumps(payload),
+                usage=Usage(input_tokens=10, output_tokens=5, requests=1),
+                raw={"tool_events": []},
+            )
+
+    class FakeSandbox:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, argv, *, timeout_seconds):
+            assert argv == ["python", "-m", "unittest", "-v"]
+            assert timeout_seconds == 30
+            return {
+                "returncode": 0,
+                "stdout": "2 tests passed",
+                "stderr": "",
+                "command_log": "validation_artifacts/command-test.json",
+            }
+
+    monkeypatch.setattr("vulnhunter.engine.DockerSandbox", FakeSandbox)
+    config = _config()
+    provider = ManagedProvider("one")
+    events: list[tuple[str, dict[str, Any]]] = []
+    engine = ScanEngine(
+        config,
+        providers={"one": provider, "two": FakeProvider("two")},
+        progress=lambda event, details: events.append((event, details)),
+    )
+
+    payload, usage = await engine._tool_loop(
+        config.models["model-a"],
+        root=tmp_path,
+        allowed_files={"app.py"},
+        user_prompt="Validate the candidate",
+        schema=VALIDATION_SCHEMA,
+        execute=True,
+    )
+
+    assert provider.calls == 2
+    assert usage.requests == 2
+    assert payload["sandbox_commands"] == []
+    assert payload["method"] == "Docker reproduction passed"
+    assert payload["_provenance"]["tool_calls"][0]["artifact"].endswith(
+        "command-test.json"
+    )
+    assert any(event == "sandbox_command_complete" for event, _ in events)
 
 
 def _config() -> Any:
@@ -287,13 +669,20 @@ async def test_invalid_model_contract_is_classified_and_billed(tmp_path: Path) -
 
     failed = next(details for event, details in events if event == "assignment_failed")
     assert failed["error"].startswith("ModelOutputError:")
-    assert "after 3 repair attempts" in failed["error"]
+    assert "after 1 repair attempts" in failed["error"]
+    assert "exhausted 3 complete task retries" in failed["error"]
     repairs = [details for event, details in events if event == "model_output_retry"]
-    assert [row["attempt"] for row in repairs] == [1, 2, 3]
-    assert failed["cost_usd"] == pytest.approx(1.0)
+    assert [row["attempt"] for row in repairs] == [1] * 8
+    task_retries = [
+        details for event, details in events if event == "assignment_output_retry"
+    ]
+    assert [row["retry"] for row in task_retries] == [1, 2, 3, 1, 2, 3]
+    assert failed["cost_usd"] == pytest.approx(2.0)
     assert manifest["status"] == "INCOMPLETE_COVERAGE"
-    assert manifest["usage"]["cost_usd"] == pytest.approx(1.0)
-    assert manifest["usage"]["requests"] == 4
+    # Both the mandatory threat-model pass and the blind hunt exhaust their
+    # structured-output retries. Usage from neither failed phase may disappear.
+    assert manifest["usage"]["cost_usd"] == pytest.approx(4.0)
+    assert manifest["usage"]["requests"] == 16
 
 
 @pytest.mark.asyncio
@@ -410,7 +799,184 @@ def test_estimate_models_repository_partitions_and_agent_rounds(
     assert estimate["requests_high"] > estimate["requests_low"] > 1
     assert estimate["input_tokens_high"] > estimate["input_tokens_low"]
     assert estimate["cost_high_usd"] > estimate["cost_low_usd"] > 0
-    assert "tool rounds" in estimate["basis"]
+    assert estimate["repository_lines"] == 40_000
+    assert estimate["base_system_prompt_tokens"] > 0
+    assert "validation/attack paths" in estimate["basis"]
+
+
+def test_model_cost_accounts_for_cached_input() -> None:
+    model = ModelSpec(
+        alias="priced",
+        provider="router",
+        model="vendor/model",
+        remote=True,
+        input_cost_per_million=2.0,
+        output_cost_per_million=8.0,
+        cache_read_cost_per_million=0.5,
+    )
+
+    cost = estimate_model_cost(
+        model,
+        1_000_000,
+        100_000,
+        cached_input_tokens=800_000,
+    )
+
+    assert cost == pytest.approx(1.6)
+
+
+def test_provider_retry_classification_rejects_hard_quota_errors() -> None:
+    assert not _provider_error_retryable(
+        ProviderError("You've hit your usage limit; purchase more credits")
+    )
+    assert not _provider_error_retryable(
+        ProviderError("invalid_request_error", status_code=400)
+    )
+    assert _provider_error_retryable(
+        ProviderError("rate limited", status_code=429, retry_after=1)
+    )
+    assert _provider_error_retryable(
+        ProviderError("transport connection closed")
+    )
+    assert _provider_error_retryable(
+        ProviderError(
+            "stream disconnected before completion: No such host is known. "
+            "(os error 11001)"
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_nonretryable_provider_failure_opens_run_circuit() -> None:
+    config = _config()
+    engine = ScanEngine(
+        config,
+        providers={"one": FakeProvider("one"), "two": FakeProvider("two")},
+    )
+    calls = 0
+
+    async def exhausted() -> tuple[dict[str, Any], Usage]:
+        nonlocal calls
+        calls += 1
+        raise ProviderError("You've hit your usage limit")
+
+    with pytest.raises(ProviderError):
+        await engine._run_with_provider_limit("one", exhausted)
+    with pytest.raises(ProviderError, match="provider disabled"):
+        await engine._run_with_provider_limit("one", exhausted)
+
+    assert calls == 1
+
+
+def _candidate(
+    candidate_id: str,
+    *,
+    title: str,
+    classification: str,
+    cwe: str,
+    source_line: int,
+    sink_line: int,
+    sink_file: str = "routes/audio.ts",
+) -> Candidate:
+    return Candidate(
+        candidate_id=candidate_id,
+        title=title,
+        classification=classification,
+        severity="High",
+        cwe=cwe,
+        source={"file": "routes/audio.ts", "line": source_line},
+        sink={"file": sink_file, "line": sink_line},
+        trace=[],
+        root_cause=title,
+        attacker_prerequisites=["authenticated"],
+        new_capability="impact",
+        contradicting_evidence=[],
+        fix_strategy="fix",
+        affected_instances=[{"file": sink_file, "line": sink_line}],
+    )
+
+
+def test_candidate_merge_consolidates_paraphrases_but_not_other_mechanisms() -> None:
+    cache_one = _candidate(
+        "raw-1",
+        title="Global idempotency cache leaks another tenant's result",
+        classification="Cross-tenant cache collision",
+        cwe="CWE-639",
+        source_line=134,
+        sink_line=162,
+    )
+    cache_two = _candidate(
+        "raw-2",
+        title="Principal-free cache returns another user's audio",
+        classification="Cross-user cache disclosure",
+        cwe="CWE-524",
+        source_line=134,
+        sink_line=165,
+    )
+    upload = _candidate(
+        "raw-3",
+        title="Unbounded multipart upload exhausts memory",
+        classification="Uncontrolled resource consumption",
+        cwe="CWE-400",
+        source_line=98,
+        sink_line=14,
+    )
+
+    merged = merge_candidates([cache_one, cache_two, upload])
+
+    assert len(merged) == 2
+    assert merged[0].duplicate_candidate_ids == ["raw-2"]
+    assert {"line": 162, "file": "routes/audio.ts"} in merged[0].affected_instances
+    assert {"line": 165, "file": "routes/audio.ts"} in merged[0].affected_instances
+
+
+def test_candidate_merge_consolidates_shared_log_endpoint_and_resource_sink() -> None:
+    log_one = _candidate(
+        "log-1",
+        title="Authenticated users can read shared global logs",
+        classification="Cross-tenant information disclosure",
+        cwe="CWE-862",
+        source_line=55,
+        sink_line=39,
+        sink_file="routes/logs.ts",
+    )
+    log_one.source = {"file": "services/chat.ts", "line": 55}
+    log_two = _candidate(
+        "log-2",
+        title="Global logs expose another tenant's data",
+        classification="Missing authorization for operational logs",
+        cwe="CWE-862",
+        source_line=20,
+        sink_line=52,
+        sink_file="routes/logs.ts",
+    )
+    log_two.source = {"file": "components/Logs.tsx", "line": 20}
+    disk_one = _candidate(
+        "disk-1",
+        title="Log ingestion permits disk exhaustion",
+        classification="Resource exhaustion",
+        cwe="CWE-400",
+        source_line=16,
+        sink_line=31,
+        sink_file="utils/logger.ts",
+    )
+    disk_one.source = {"file": "routes/logs.ts", "line": 16}
+    disk_two = _candidate(
+        "disk-2",
+        title="Log ingestion causes synchronous disk amplification",
+        classification="Uncontrolled resource consumption",
+        cwe="CWE-400",
+        source_line=16,
+        sink_line=31,
+        sink_file="utils/logger.ts",
+    )
+    disk_two.source = {"file": "routes/logs.ts", "line": 16}
+
+    merged = merge_candidates([log_one, log_two, disk_one, disk_two])
+
+    assert len(merged) == 2
+    assert merged[0].duplicate_candidate_ids == ["log-2"]
+    assert merged[1].duplicate_candidate_ids == ["disk-2"]
 
 
 @pytest.mark.asyncio
@@ -461,6 +1027,8 @@ async def test_resume_reuses_completed_assignments(tmp_path: Path) -> None:
             model_aliases=["model-a", "model-b"],
         )
     )
+    state = json.loads((results / "run_state.json").read_text())
+    assert Path(state["repository"]) == repo.resolve()
     first_calls = provider_one.calls + provider_two.calls
     assert first_calls > 0
 

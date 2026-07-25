@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VulnHunter security surface ledger row v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "surface_id",
+    "boundary",
+    "family",
+    "priority",
+    "mandatory",
+    "files",
+    "assigned_models",
+    "evidence",
+    "candidate_ids",
+    "disposition",
+    "closure_reason"
+  ],
+  "properties": {
+    "schema_version": {"const": "2"},
+    "surface_id": {"type": "string"},
+    "boundary": {"type": "string"},
+    "family": {"type": "string"},
+    "priority": {"enum": ["critical", "high", "normal"]},
+    "mandatory": {"type": "boolean"},
+    "files": {"type": "array", "items": {"type": "string"}},
+    "assigned_models": {"type": "array", "items": {"type": "string"}},
+    "evidence": {"type": "array", "items": {"type": "object"}},
+    "candidate_ids": {"type": "array", "items": {"type": "string"}},
+    "disposition": {
+      "enum": [
+        "REPORTABLE",
+        "DEFERRED",
+        "SUPPRESSED",
+        "NOT_APPLICABLE",
+        "UNRESOLVED"
+      ]
+    },
+    "closure_reason": {"type": "string"}
+  }
+}

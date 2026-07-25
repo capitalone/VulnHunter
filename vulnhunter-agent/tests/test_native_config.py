@@ -196,6 +196,35 @@ def test_existing_config_can_append_codex_cli_without_replacement(tmp_path) -> N
     assert updated.models["codex-cli"].reasoning_effort == "auto"
 
 
+def test_existing_config_can_append_openai_api_without_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "[providers.openrouter]\n"
+        'kind = "openrouter"\n'
+        'api_key_env = "OPENROUTER_API_KEY"\n\n'
+        "[models.openrouter]\n"
+        'provider = "openrouter"\n'
+        'model = "openrouter/auto"\n'
+        "priority = 10\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "not-written")
+    original = load_engine_config(path, apply_model_defaults=False)
+
+    model_id = setup.append_api_provider_config(path, original, "openai")
+    updated = load_engine_config(path, apply_model_defaults=False)
+    content = path.read_text(encoding="utf-8")
+
+    assert model_id == "gpt-5"
+    assert updated.providers["openai"].api_key_env == "OPENAI_API_KEY"
+    assert updated.models["openai-primary"].provider == "openai"
+    assert "not-written" not in content
+    assert updated.models["openrouter"].model == "openrouter/auto"
+
+
 def test_saved_model_defaults_override_toml_without_editing_it(
     tmp_path,
 ) -> None:

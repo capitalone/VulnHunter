@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 from pathlib import Path
 from typing import Any
+
+from .sandbox import DockerSandbox
 
 
 MAX_FILE_BYTES = 1_000_000
@@ -74,6 +74,22 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "write_artifact",
+        "description": (
+            "Write a bounded scanner artifact outside the source snapshot. "
+            "This never modifies repository files."
+        ),
+        "input_schema": {
+            "type": "object",
+            "required": ["path", "content"],
+            "properties": {
+                "path": {"type": "string", "maxLength": 240},
+                "content": {"type": "string", "maxLength": 100000},
+            },
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -84,12 +100,14 @@ class RepositoryTools:
         *,
         allowed_files: set[str] | None = None,
         execute: bool = False,
-        sandbox_prefix: tuple[str, ...] = (),
+        sandbox: DockerSandbox | None = None,
+        artifact_dir: Path | None = None,
     ) -> None:
         self.root = root.resolve()
         self.allowed_files = allowed_files
         self.execute = execute
-        self.sandbox_prefix = sandbox_prefix
+        self.sandbox = sandbox
+        self.artifact_dir = artifact_dir.resolve() if artifact_dir else None
 
     @property
     def definitions(self) -> list[dict[str, Any]]:
@@ -147,6 +165,11 @@ class RepositoryTools:
                 result = self.find_symbol(
                     str(arguments["symbol"]),
                     limit=int(arguments.get("limit", 100)),
+                )
+            elif name == "write_artifact":
+                result = self.write_artifact(
+                    str(arguments["path"]),
+                    str(arguments["content"]),
                 )
             elif name == "run_command":
                 result = self.run_command(
@@ -246,26 +269,29 @@ class RepositoryTools:
     def run_command(self, argv: list[str], *, timeout_seconds: int = 60) -> dict[str, Any]:
         if not self.execute:
             raise PermissionError("target code execution was not enabled")
-        if not self.sandbox_prefix:
-            raise PermissionError("no sandbox command prefix is configured")
+        if self.sandbox is None:
+            raise PermissionError("no Docker sandbox is configured")
         if not argv or not all(isinstance(item, str) and item for item in argv):
             raise ValueError("argv must be a non-empty string array")
-        command = [*self.sandbox_prefix, *argv]
-        completed = subprocess.run(
-            command,
-            cwd=self.root,
-            capture_output=True,
-            text=True,
-            timeout=min(max(timeout_seconds, 1), 300),
-            shell=False,
-            env=_minimal_env(),
-            check=False,
-        )
-        return {
-            "returncode": completed.returncode,
-            "stdout": completed.stdout[:50_000],
-            "stderr": completed.stderr[:50_000],
-        }
+        return self.sandbox.run(argv, timeout_seconds=timeout_seconds)
+
+    def write_artifact(self, path: str, content: str) -> str:
+        if self.artifact_dir is None:
+            raise PermissionError("artifact writing is unavailable")
+        if len(content) > MAX_TOOL_OUTPUT_CHARS:
+            raise ValueError(
+                f"artifact exceeds {MAX_TOOL_OUTPUT_CHARS} character limit"
+            )
+        if not path or "\x00" in path:
+            raise ValueError("invalid artifact path")
+        destination = (self.artifact_dir / path).resolve()
+        try:
+            destination.relative_to(self.artifact_dir)
+        except ValueError as exc:
+            raise PermissionError(f"artifact path escapes output root: {path}") from exc
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(content, encoding="utf-8")
+        return destination.relative_to(self.artifact_dir).as_posix()
 
     def _allowed(self, relative: str) -> bool:
         return self.allowed_files is None or relative in self.allowed_files
@@ -282,12 +308,6 @@ class RepositoryTools:
         if not self._allowed(rel):
             raise PermissionError(f"path is outside this assignment scope: {relative}")
         return candidate
-
-
-def _minimal_env() -> dict[str, str]:
-    allowed = {"PATH", "SYSTEMROOT", "WINDIR", "TMP", "TEMP", "HOME", "USERPROFILE"}
-    return {key: value for key, value in os.environ.items() if key in allowed}
-
 
 def _bounded(value: str) -> str:
     if len(value) <= MAX_TOOL_OUTPUT_CHARS:

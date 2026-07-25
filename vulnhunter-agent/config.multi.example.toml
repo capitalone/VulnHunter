@@ -154,5 +154,9 @@ enabled = false
 prompt = "Perform a supplemental cloud IAM, credential scope, and confused-deputy audit."
 
 [sandbox]
-# Must invoke a real sandbox wrapper before --execute is accepted.
-command_prefix = []
+# Target execution is Docker-only and remains disabled unless --execute is used.
+backend = "docker"
+image = "vulnhunter-sandbox:0.3.0"
+memory = "2g"
+cpus = 2.0
+pids_limit = 256

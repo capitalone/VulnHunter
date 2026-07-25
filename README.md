@@ -19,8 +19,11 @@ VulnHunter is an open-source, **agentic AI security tool** that applies proactiv
 | Multi-model teams | Blind generalist hunts, candidate union, and cross-model review |
 | Provider-neutral CLI | Terminal and CI use without requiring Claude Code |
 | Broad provider support | Anthropic, OpenAI, OpenRouter, Gemini, Codex CLI, Ollama, and local OpenAI-compatible servers |
-| Adjustable rigor | Quick, Standard, Deep, and Exhaustive scan levels |
-| Operational controls | Cost tracking, rate-limit handling, checkpoints, resume, and typed manifests |
+| Threat-model workflow | Mandatory surface classification, threat modeling, clean-result challenges, validation, and attack paths |
+| Deterministic coverage | Native security rules plus optional Semgrep, Gitleaks, Trivy, and ast-grep seeds |
+| Adjustable rigor | Quick, Standard, Deep, and Exhaustive scan levels with explicit closure requirements |
+| Safe validation | Static by default; optional target execution occurs only inside the built-in Docker sandbox |
+| Operational controls | Cost tracking, rate-limit handling, checkpoints, compatible resume, and typed v2 manifests |
 | Coding-tool integration | One root `SKILL.md` for Codex, Claude Code, OpenCode, Pi, and similar tools |
 
 ## See it in action
@@ -37,6 +40,172 @@ estimated time remaining, provider usage, completed responses, and tool activity
 ![VulnHunter live multi-model scan progress](docs/images/live-scan-progress.png)
 
 ## Quick start
+
+### Beginner setup: zero to your first scan
+
+You do not need Docker, Claude Code, Codex, or any optional security scanner for
+your first static scan. You need:
+
+- Python 3.12 or newer
+- Git
+- A model provider: an OpenRouter API key is the simplest remote option, while
+  Ollama is available for users who want to keep source code local
+- A repository you are authorized to examine
+
+Remote providers receive the repository content needed for their assignments.
+VulnHunter shows the exact remote model roster before anything is dispatched.
+
+#### 1. Download and install VulnHunter
+
+Windows PowerShell:
+
+```powershell
+git clone https://github.com/JJsilvera1/Multi-VulnHunter.git
+cd Multi-VulnHunter
+
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .\vulnhunter-agent
+```
+
+macOS or Linux:
+
+```bash
+git clone https://github.com/JJsilvera1/Multi-VulnHunter.git
+cd Multi-VulnHunter
+
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ./vulnhunter-agent
+```
+
+The `(.venv)` prefix in the terminal means the environment is active. Activate
+it again whenever you open a new terminal before using `vulnhunter`.
+
+#### 2. Add an OpenRouter key
+
+Generate the credential template and open it in a text editor.
+If `providers.env` already exists, skip the `env-example` command and open the
+existing file so that other saved provider keys are not replaced.
+
+Windows PowerShell:
+
+```powershell
+vulnhunter env-example --write "$HOME\.vulnhunter\providers.env"
+notepad "$HOME\.vulnhunter\providers.env"
+```
+
+macOS or Linux:
+
+```bash
+vulnhunter env-example --write ~/.vulnhunter/providers.env
+nano ~/.vulnhunter/providers.env
+```
+
+Add or update this line, replacing the example with your real key:
+
+```env
+OPENROUTER_API_KEY=sk-or-v1-your-key-here
+```
+
+Save and close the file. Do not put the key in the target repository, commit it
+to Git, paste it into `config.toml`, or share it in screenshots. VulnHunter reads
+`~/.vulnhunter/providers.env` automatically and does not copy the secret into
+its model configuration.
+
+OpenRouter is optional. Anthropic, OpenAI, Gemini, Codex CLI OAuth, Ollama, and
+OpenAI-compatible local servers are documented under
+[Provider credentials](#provider-credentials).
+
+There are two different ways to select an OpenAI model:
+
+- With only `OPENROUTER_API_KEY`, choose an `openai/...` model from the
+  **OpenRouter** section or type `/openai` in the shared catalog. Usage is routed
+  and billed by OpenRouter.
+- For the direct **OpenAI API** section, also add
+  `OPENAI_API_KEY=your-key` to `providers.env` and rerun `vulnhunter init`.
+  Existing configuration is preserved; VulnHunter offers to add the newly
+  detected provider without requiring `--force`.
+
+#### 3. Start the guided setup
+
+```powershell
+vulnhunter init
+```
+
+The wizard will:
+
+1. Detect the OpenRouter key and ask permission to configure the remote
+   provider.
+2. Ask for the local repository path or Git URL to scan.
+3. Ask for an optional branch, tag, or commit.
+4. Ask for scan depth and one to three core models.
+5. Open the live model catalog. Type a number to select a model, `/text` to
+   filter the catalog, `n` for the next page, or `p` for the previous page.
+6. Show the selected providers, source-exposure notice, analysis workflow, and
+   execution permissions before asking for final confirmation.
+
+For a first experiment, choose **Quick**, **1 model**, and an inexpensive model.
+The catalog displays context size and input/output pricing. Free OpenRouter
+models can be slower or rate-limited.
+
+Choose **Y** at the final screen to begin, **C** to change the configuration, or
+**N** to save the setup without scanning.
+
+#### 4. Read the result correctly
+
+During the scan, the terminal reports the current phase, elapsed time, estimated
+time remaining, responses, tool calls, and provider-reported or estimated cost.
+At completion it prints paths similar to:
+
+```text
+Status:  COMPLETE_FINDINGS
+Results: C:\src\my-project_VULNHUNT_RESULTS_multi_...
+Report:  C:\src\my-project_VULNHUNT_RESULTS_multi_...\README.md
+```
+
+Open the printed report path. The important statuses are:
+
+- `COMPLETE_CLEAN`: completed required coverage without a reportable finding
+- `COMPLETE_FINDINGS`: completed coverage and found reportable vulnerabilities
+- `COMPLETE_CONDITIONAL`: unresolved or conditional security conclusions; not clean
+- `INCOMPLETE_COVERAGE` or `INCOMPLETE_LIMIT`: unfinished; never treat as clean
+- `FAILED`: the provider or workflow failed
+
+If an interactive scan is incomplete, accept the resume offer to continue from
+its checkpoint instead of repeating completed work.
+
+#### Common beginner problems
+
+`vulnhunter` is not recognized on Windows:
+
+```powershell
+cd C:\path\to\Multi-VulnHunter
+.\.venv\Scripts\Activate.ps1
+vulnhunter --help
+```
+
+If PowerShell prevents activation, either allow it for only the current process
+or invoke the executable directly:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+
+# Direct alternative:
+.\.venv\Scripts\vulnhunter.exe init
+```
+
+Provider or credential problems:
+
+```powershell
+vulnhunter doctor
+```
+
+Docker warnings do not block ordinary static scans. Docker is required only
+when the user explicitly supplies `--execute`.
 
 ### Import as a skill
 
@@ -69,7 +238,10 @@ walks through one complete scan setup:
 4. Choose one, two, or three core models.
 5. Select each model from the combined live provider catalog.
 6. Review source exposure, reasoning settings, and the complete configuration.
-7. Choose **Y** to scan, **C** to change it, or **N** to save without scanning.
+7. Review the post-selection workflow, execution permissions, output contract,
+   and incomplete-coverage rule.
+8. Choose **Y** to continue through preflight and scan, **C** to change the
+   setup, or **N** to save without scanning.
 
 The first screen looks like this:
 
@@ -84,6 +256,11 @@ Choose scan level:
   4. Exhaustive   Maximum static coverage and evidence
 
 How many core models? [1-3, default 1]: 3
+
+Choose validation mode:
+  1. Static/read-only — do not run target code
+  2. Docker validation — test suitable findings in the isolated sandbox
+Validation mode [1-2, default 1]:
 ```
 
 After model selection, VulnHunter shows a final review:
@@ -99,8 +276,47 @@ Scan configuration
     3. ollama/local-coder (local)
   Execution: static/read-only
 
-Start this scan? [Y]es / [C]hange / [N] save setup only:
+What happens next
+  1. Resolve an immutable repository snapshot and run provider preflight.
+  2. Inventory security surfaces and generate a repository threat model.
+  3. Run native security rules, then isolated blind model hunts.
+  4. Challenge coverage gaps; review, validate, and trace candidates.
+  5. Close the coverage ledger and write the report plus manifest v2.
+  Optional scanners: used when installed (auto mode); absence is recorded.
+  Target code: not executed. Use --execute later for Docker-only validation.
+  Result rule: failed or unclosed mandatory coverage is INCOMPLETE_COVERAGE,
+  never clean.
+
+Continue to preflight and start if checks pass?
+[Y]es / [C]hange / [N] save setup only:
 ```
+
+The **Change** menu can revise the target/ref, depth, model roster and reasoning
+settings, or validation mode. If Docker validation is selected, the review
+screen says so explicitly. VulnHunter checks Docker Desktop before it prepares
+the repository or contacts a model. When Desktop is installed but stopped, the
+walkthrough offers to start it and waits for the engine; it does not interpret a
+stopped daemon as a failed security scan.
+
+After **Y**, VulnHunter first resolves the selected revision, creates a stable
+snapshot, checks provider health and capabilities, inventories the repository,
+and prints its workload, time, and cost forecast. It then runs the selected
+depth without another ordinary wizard question. `Ctrl-C`, duration, token, and
+cost limits still stop new work safely and preserve a resumable checkpoint.
+
+Native deterministic rules run at every level. Optional tools such as Semgrep,
+Gitleaks, Trivy, and ast-grep run when installed under the default
+`--static-tools auto` policy; their absence is recorded but does not by itself
+make a scan incomplete. Use `--static-tools required` when their availability
+must be enforced before any model dispatch.
+
+The default remains static and read-only. `--execute` is never inferred from a
+model choice: it must be selected in the guided validation-mode screen or
+supplied explicitly and requires the Docker sandbox.
+The completed results directory contains the human report, `run_manifest.json`
+schema v2, threat model, security-surface and coverage ledgers, deterministic
+seeds, and any validation or attack-path artifacts. A failed assignment or
+unclosed mandatory surface produces an incomplete status, not a clean result.
 
 Use `vulnhunter init --setup-only` when you only want to configure providers.
 After setup, `vulnhunter scan PATH` starts another scan without rebuilding the
@@ -124,11 +340,15 @@ Useful commands:
 
 | Command | Purpose |
 |---|---|
-| `vulnhunter models` | Change saved models across active providers |
-| `vulnhunter doctor` | Check providers, credentials, Git, and local prerequisites |
+| `vulnhunter models` | Rebuild the one-to-three-model team across all configured providers |
+| `vulnhunter doctor` | Check providers, credentials, Git, optional tools, and Docker |
+| `vulnhunter sandbox doctor` | Diagnose the Docker validation backend and image |
+| `vulnhunter sandbox build` | Build the versioned validation image |
 | `vulnhunter init --setup-only` | Configure providers without starting a scan |
 | `vulnhunter scan .` | Choose scan depth and a core team of up to three models |
 | `vulnhunter scan URL --ref TAG` | Scan an isolated branch, tag, or commit checkout |
+| `vulnhunter scan . --execute` | Allow disclosed target commands inside Docker only |
+| `vulnhunter scan . --execute --start-docker --yes` | Start Docker Desktop if needed, wait for it, then run unattended |
 | `vulnhunter scan . --team-model codex-cli` | Scan with only the saved Codex model |
 | `vulnhunter instructions codex` | Print a coding-tool walkthrough |
 
@@ -138,32 +358,187 @@ runtimes, and automation.
 
 ### How multi-model scanning works
 
-Core models begin as unrestricted generalists. They hunt independently and do
-not see one another's conclusions until blind discovery finishes. Candidates
-are unioned—never majority-voted away—and then reviewed in fresh contexts.
-Higher depth settings add coverage analysis, focused follow-ups, more reviewers,
-and stronger evidence requirements.
+VulnHunter now treats “no candidates” and “clean” as different states. It first
+creates an immutable repository snapshot, classifies trust boundaries, and
+persists a threat model and mandatory security-surface ledger. Core models then
+hunt independently without seeing deterministic scanner seeds or one another’s
+conclusions. After blind discovery, seeds and uncovered critical surfaces get
+focused follow-ups. Candidates are unioned—never majority-voted away—then
+reviewed, validated, and assigned an attack path and severity.
 
 ```mermaid
 flowchart TD
-    A["Repository inventory"] --> B{"Selected depth"}
-    B --> H1["Generalist model A — blind hunt"]
-    B --> H2["Generalist model B — blind hunt"]
-    B --> H3["Generalist model C — blind hunt"]
-    H1 --> U["Union and deduplicate candidates"]
+    A["Immutable repository snapshot"] --> I["Production, dormant, support, and excluded inventory"]
+    I --> T["Threat model and mandatory security-surface ledger"]
+    T --> R["Native rules and optional scanner seeds (withheld)"]
+    T --> H1["Generalist model A: blind boundary hunts"]
+    T --> H2["Generalist model B: blind boundary hunts"]
+    T --> H3["Generalist model C: blind boundary hunts"]
+    H1 --> U["Candidate union with every concrete instance retained"]
     H2 --> U
     H3 --> U
-    U --> R["Fresh-context cross-model review"]
-    R --> Q{"Depth-specific work"}
-    Q -->|"Quick"| F["Falsification and static evidence"]
-    Q -->|"Standard"| S["Ring review and root-cause sweep"]
-    Q -->|"Deep"| D["Coverage gaps, disputes, second review"]
-    Q -->|"Exhaustive"| E["Every peer reviews every candidate; two sweeps"]
-    F --> O["Typed manifest and human-readable report"]
-    S --> O
-    D --> O
-    E --> O
+    R --> F["Seed follow-ups after blind discovery"]
+    U --> F
+    F --> C["Clean challengers for uncovered critical surfaces"]
+    C --> V["Cross-review and source/control/sink validation"]
+    V --> P["Attack-path analysis and severity calibration"]
+    P --> L{"Every mandatory surface closed?"}
+    L -->|"No"| X["INCOMPLETE_COVERAGE — never clean"]
+    L -->|"Yes"| O["Report, run_manifest.json v2, and legacy manifest v1"]
 ```
+
+Scan level controls rigor; model count controls diversity:
+
+| Level | Additional guarantees |
+|---|---|
+| Quick | One threat-model pass, native seeds, boundary hunts, semantic candidate reconciliation, fresh-context validation, attack-path analysis, and critical-surface challengers |
+| Standard | Quick plus independent hunts from every core model, ring review, one root-cause sweep, and complete mandatory-surface closure |
+| Deep | Standard plus a second threat-model review, gap assignments, second review of unique/severe/disputed candidates, and optional Docker reproduction |
+| Exhaustive | Deep plus every non-origin review, two sweeps, focused disagreement resolution, and a PoC or explicit proof gap for every surviving instance |
+
+Final candidate dispositions are `REPORTABLE`, `DEFERRED`, `SUPPRESSED`,
+`NOT_APPLICABLE`, or `UNRESOLVED`. `DEFERRED`, failed assignments, and unclosed
+mandatory surfaces are never presented as a clean scan.
+
+Before downstream review, VulnHunter semantically consolidates paraphrases of
+the same root cause. Concrete affected files, lines, entrypoints, traces, and
+discoverer provenance remain attached as separate instances. This prevents
+three models—or several boundary passes by one model—from triggering a complete
+review/validation/attack-path cycle for every differently worded description of
+the same defect.
+
+Independent assignments within each phase run concurrently up to
+`--max-workers`: boundary hunts run together, followed by concurrent seed
+reviews, candidate reviews, validations, and attack-path analyses. The phase
+barriers are deliberate. Seeds remain hidden until blind discovery finishes,
+review waits until the candidate union is consolidated, and attack-path work
+waits for validation. Codex CLI remains serialized because parallel `codex
+exec` processes can race its shared OAuth refresh state; direct APIs and
+healthy local servers can use multiple workers.
+
+Preflight estimates use repository bytes, lines, approximate callable symbols,
+security surfaces, shard count, model reasoning effort, and expected downstream
+candidate work. During a phase, ETA is recalculated from observed assignment
+durations. OpenRouter billed generation cost is authoritative and includes
+provider-side cache discounts; catalog arithmetic is only a fallback. Add
+`--verbose --log-file PATH` to record initial system/task prompt estimates,
+provider input/output/cache tokens, tool events, and phase progress as JSONL.
+
+### Performance expectations and current comparison status
+
+**Quick is the lowest VulnHunter depth, but it is not a lightweight grep.** It
+still inventories security boundaries, creates a threat model, performs blind
+model hunts, challenges critical coverage, validates surviving candidates, and
+calibrates attack paths. Repository size, model latency, number of consolidated
+root causes, and provider concurrency therefore matter more than the word
+“Quick.”
+
+A July 2026 development comparison scanned CharismAI revision
+`6d1013d522621f72fcb3f490429e891177e52d02` using one Codex CLI
+`gpt-5.6-sol` model at medium reasoning, Quick depth, and static/read-only
+permissions. Against nine supplied Codex Security reportable instances:
+
+- VulnHunter discovered a counterpart for all nine.
+- Eight were finalized as reportable.
+- The prospect-details RPC candidate was deferred because the immutable
+  snapshot did not contain the deployed SQL authorization definition. Codex
+  Security used a definition from an older Git revision; VulnHunter did not
+  treat historical code as proof of the current deployed control.
+- No assignment remained failed and all mandatory surfaces closed.
+
+That development run took about 4.5 cumulative hours across interruption and
+resume sessions and made 211 successful model assignments. It began with the
+legacy candidate grouping, which expanded 63 raw candidates into 63 review
+tasks, 62 validations, and 61 attack-path analyses. Applying the current
+semantic reconciler to the same saved candidates produces 25 root-cause groups
+(16 reportable, 7 deferred, and 2 suppressed) while retaining every concrete
+instance. New scans use this grouping before downstream work, but a fresh timed
+run is still required to measure the real wall-clock improvement.
+
+These results are encouraging, but they are **not a general Codex-parity
+claim**. One repository and one stochastic run cannot establish precision,
+recall, or runtime parity. The benchmark harness and three-run acceptance gate
+described below remain the standard for any broader claim.
+
+Codex CLI is deliberately serialized because parallel CLI processes have
+previously raced its shared OAuth refresh state. Direct API, OpenRouter, and
+healthy local providers can use `--max-workers` for safe within-phase
+concurrency. Checkpoints persist after each assignment, and transient DNS,
+stream-disconnect, timeout, and rate-limit errors receive bounded retries.
+Authentication, billing, invalid-request, and exhausted-quota errors fail fast
+without repeatedly charging or disabling unrelated providers.
+
+### Static analysis and Docker validation
+
+Every scan level is static and read-only unless you explicitly add `--execute`.
+Execution is Docker-only; VulnHunter never runs target commands directly on the
+host.
+
+```bash
+vulnhunter sandbox doctor
+vulnhunter sandbox build
+vulnhunter scan . --level deep --models 2 --execute
+```
+
+With `--execute`, VulnHunter checks the Docker CLI, daemon, Desktop installation,
+and sandbox image before repository preparation or model dispatch. Interactive
+use offers to start a stopped Docker Desktop. For non-interactive jobs, either
+start Docker beforehand or add `--start-docker`; a missing sandbox image still
+requires one explicit `vulnhunter sandbox build`.
+
+The sandbox mounts `/source` read-only, copies it into a disposable `/work`,
+runs as a non-root user, drops capabilities, applies CPU/memory/PID/time/output
+limits, inherits no credentials, mounts no Docker socket, and disables networking
+by default. `--allow-private-network` is a separate, prominent opt-in. On Docker
+hosts where internet-only egress cannot be enforced, VulnHunter safely rejects
+`--allow-network` without the private-network opt-in instead of silently allowing
+access to loopback, RFC1918, link-local, metadata, or host addresses.
+
+Codex CLI and other provider-managed agents never receive direct Docker
+authority. During validation they can propose bounded argument-array commands;
+the VulnHunter engine runs those commands in its own sandbox, records redacted
+command artifacts, and returns the results for a separate final-verdict turn.
+
+Advanced scope and tool controls:
+
+```bash
+vulnhunter scan . \
+  --include-dormant \
+  --static-tools auto \
+  --threat-model path/to/threat_model.json
+```
+
+`--static-tools required` fails before model dispatch if an optional scanner is
+missing or cannot run. Scanner matches are seeds, not automatic vulnerabilities.
+A reused threat model must match the immutable repository snapshot digest.
+
+### Artifacts and automation contract
+
+`run_manifest.json` is schema version `2`. It records the snapshot digest, phase
+and prompt state, surface closure, provider/model provenance, token/cache/cost
+usage, sandbox policy, unfinished work, and exact incomplete reasons. Related
+artifacts include:
+
+- `threat_model.json` and `threat_model.md`
+- `security_surfaces.jsonl` and `coverage_ledger.jsonl`
+- `static_seeds.jsonl`
+- `validation/<candidate>.json`
+- `attack_paths/<candidate>.json`
+- `validation_artifacts/` command logs and reproduction output
+- the human `README.md`
+
+The legacy `scan_manifest.json` v1 is still emitted for the fixer, verifier, and
+publishers. It contains only `REPORTABLE` findings. Conditional, unresolved,
+failed, or incomplete v2 runs map to the legacy failure state, so older consumers
+cannot mistake partial coverage for clean.
+
+The reproducible comparison harness in
+[`vulnhunter-agent/benchmarks/`](vulnhunter-agent/benchmarks/) materializes 25
+application fixtures with 100 labeled reportable, deferred, and safe instances.
+It scores normalized VulnHunter and Codex Security runs for recall, precision,
+High/Critical false-cleans, review survival, coverage closure, cost, tokens, and
+duration. The project does not claim Codex parity until the documented
+three-run acceptance gate is actually met.
 
 ### Provider credentials
 

@@ -4,7 +4,11 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
+import time
 from pathlib import Path
+
+import pytest
 
 from vulnhunter.cli import (
     _ask_level,
@@ -12,15 +16,19 @@ from vulnhunter.cli import (
     _browse_model_list,
     _browse_provider_model_list,
     _configure_models_interactively,
+    _configure_console_encoding,
     _configure_fresh_model_roster,
     _choose_team_aliases,
+    _ensure_execute_sandbox,
     _load_env_file,
     _live_scan_summary,
     _make_progress_handler,
     _choose_reasoning_effort,
+    _print_guided_scan_summary,
     _render_progress,
     _resolve_target,
     _run_guided_init_scan,
+    _ask_execution_mode,
     _set_color_mode,
     main,
 )
@@ -45,6 +53,28 @@ def _config():
             },
         }
     )
+
+
+def test_windows_redirected_console_is_reconfigured_for_unicode(monkeypatch) -> None:
+    class RedirectedStream:
+        encoding = "cp1252"
+
+        def __init__(self) -> None:
+            self.settings: tuple[str, str] | None = None
+
+        def reconfigure(self, *, encoding: str, errors: str) -> None:
+            self.settings = (encoding, errors)
+
+    stdout = RedirectedStream()
+    stderr = RedirectedStream()
+    monkeypatch.setattr("vulnhunter.cli.os.name", "nt")
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr)
+
+    _configure_console_encoding()
+
+    assert stdout.settings == ("utf-8", "replace")
+    assert stderr.settings == ("utf-8", "replace")
 
 
 def test_scan_wizard_uses_two_questions(monkeypatch, tmp_path: Path) -> None:
@@ -83,6 +113,77 @@ def test_reasoning_picker_offers_auto_and_supported_levels(monkeypatch) -> None:
     )
 
     assert selected == "medium"
+
+
+def test_execution_mode_defaults_to_static(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    assert _ask_execution_mode() is False
+
+
+@pytest.mark.asyncio
+async def test_execute_preflight_explains_stopped_docker_noninteractive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "vulnhunter.cli.docker_status",
+        lambda _image: {
+            "available": False,
+            "installed": True,
+            "desktop_installed": True,
+            "image_available": False,
+            "detail": "daemon unavailable",
+        },
+    )
+
+    with pytest.raises(ValueError, match="Start Docker Desktop"):
+        await _ensure_execute_sandbox(
+            image="test-image",
+            non_interactive=True,
+            start_requested=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_execute_preflight_can_start_docker_desktop(monkeypatch, capsys) -> None:
+    statuses = iter(
+        [
+            {
+                "available": False,
+                "installed": True,
+                "desktop_installed": True,
+                "image_available": False,
+                "detail": "daemon unavailable",
+            },
+            {
+                "available": True,
+                "installed": True,
+                "daemon_running": True,
+                "desktop_installed": True,
+                "image_available": True,
+                "version": "99.0",
+                "detail": "ok",
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        "vulnhunter.cli.docker_status", lambda _image: next(statuses)
+    )
+    monkeypatch.setattr(
+        "vulnhunter.cli.start_docker_desktop",
+        lambda: (True, "started"),
+    )
+
+    await _ensure_execute_sandbox(
+        image="test-image",
+        non_interactive=True,
+        start_requested=True,
+        wait_seconds=0.01,
+    )
+
+    output = capsys.readouterr().out
+    assert "Docker is installed, but Docker Desktop is not running" in output
+    assert "Docker check passed (99.0)" in output
 
 
 def test_incomplete_scan_offers_checkpoint_resume(monkeypatch, tmp_path: Path) -> None:
@@ -203,6 +304,49 @@ def test_init_reuses_existing_config_without_force(
     assert "Using existing VulnHunter config" in capsys.readouterr().out
 
 
+def test_init_adds_newly_detected_api_provider_to_existing_config(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[providers.local]\n"
+        'kind = "openai_compatible"\n'
+        'base_url = "http://local"\n'
+        "remote = false\n\n"
+        "[models.local]\n"
+        'provider = "local"\n'
+        'model = "coder"\n'
+        "remote = false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "not-written")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("vulnhunter.cli.discover_codex_cli", lambda: None)
+
+    async def healthy(_config, *, probe_models=True):
+        del probe_models
+        return []
+
+    monkeypatch.setattr("vulnhunter.cli.doctor", healthy)
+
+    result = main(
+        [
+            "init",
+            "--config",
+            str(config_path),
+            "--allow-remote",
+            "--setup-only",
+        ]
+    )
+
+    config = load_engine_config(config_path, apply_model_defaults=False)
+    assert result == 0
+    assert config.providers["openai"].api_key_env == "OPENAI_API_KEY"
+    assert config.models["local"].model == "coder"
+    assert "not-written" not in config_path.read_text(encoding="utf-8")
+    assert "Added OpenAI API provider" in capsys.readouterr().out
+
+
 def test_setup_only_init_adds_codex_without_starting_scan_wizard(
     monkeypatch, tmp_path: Path, capsys
 ) -> None:
@@ -243,7 +387,7 @@ def test_setup_only_init_adds_codex_without_starting_scan_wizard(
 
 
 def test_guided_init_collects_target_depth_team_and_confirmation(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, capsys
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -259,7 +403,7 @@ def test_guided_init_collects_target_depth_team_and_confirmation(
         "remote = false\n",
         encoding="utf-8",
     )
-    answers = iter([str(repo), "", "2", "1", ""])
+    answers = iter([str(repo), "", "2", "1", "2", ""])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
 
     async def configure(config, *, discovered=None, target_count=None):
@@ -296,6 +440,13 @@ def test_guided_init_collects_target_depth_team_and_confirmation(
     assert captured["models"] == 1
     assert captured["yes"] is True
     assert captured["ref"] is None
+    assert captured["execute"] is True
+    assert captured["start_docker"] is True
+    output = capsys.readouterr().out
+    assert "What happens next" in output
+    assert "immutable repository snapshot" in output
+    assert "manifest v2" in output
+    assert "INCOMPLETE_COVERAGE, never clean" in output
 
 
 def test_guided_init_does_not_start_with_unhealthy_provider(
@@ -320,7 +471,7 @@ def test_guided_init_does_not_start_with_unhealthy_provider(
     )
     monkeypatch.setattr("vulnhunter.cli._ask_level", lambda: ScanLevel.QUICK)
     monkeypatch.setattr("vulnhunter.cli._ask_initial_model_count", lambda: 1)
-    answers = iter(["", "n"])
+    answers = iter(["", "", "n"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
 
     async def configure(config, *, discovered=None, target_count=None):
@@ -633,6 +784,48 @@ def test_progress_uses_semantic_status_colors(capsys) -> None:
     assert "\033[1;31m" in output
 
 
+def test_guided_summary_colorizes_configuration_workflow_and_warnings(
+    capsys,
+) -> None:
+    config = parse_engine_config(
+        {
+            "providers": {
+                "openrouter": {
+                    "kind": "openrouter",
+                    "remote": True,
+                }
+            },
+            "models": {
+                "openrouter": {
+                    "provider": "openrouter",
+                    "model": "vendor/model:free",
+                    "remote": True,
+                    "reasoning_effort": "medium",
+                }
+            },
+        }
+    )
+    _set_color_mode("always")
+    try:
+        _print_guided_scan_summary(
+            config,
+            r"C:\src\project",
+            None,
+            ScanLevel.QUICK,
+        )
+    finally:
+        _set_color_mode("auto")
+
+    output = capsys.readouterr().out
+    assert "\033[1;36mC:\\src\\project\033[0m" in output
+    assert "\033[1;36mopenrouter/vendor/model:free\033[0m" in output
+    assert "\033[33mREMOTE — source is sent\033[0m" in output
+    assert "\033[1;32mstatic/read-only\033[0m" in output
+    assert "\033[1;34m1.\033[0m" in output
+    assert "\033[33mINCOMPLETE_COVERAGE\033[0m" in output
+    assert "\033[1;31mnever clean\033[0m" in output
+
+
 def test_live_status_line_colorizes_independent_metrics() -> None:
     _set_color_mode("always")
     try:
@@ -670,11 +863,33 @@ def test_progress_handler_writes_jsonl_when_console_is_quiet(tmp_path: Path) -> 
     )
 
     progress("model_waiting", {"model": "model-a", "elapsed_seconds": 15})
+    progress.flush()
 
     record = json.loads(log_file.read_text(encoding="utf-8"))
     assert record["event"] == "model_waiting"
     assert record["model"] == "model-a"
     assert record["timestamp"]
+    progress.close()
+
+
+def test_progress_handler_does_not_block_on_slow_console(monkeypatch) -> None:
+    rendered = []
+
+    def slow_render(event, details, *, verbose):
+        time.sleep(0.05)
+        rendered.append((event, details, verbose))
+
+    monkeypatch.setattr("vulnhunter.cli._render_progress", slow_render)
+    progress = _make_progress_handler(quiet=False, verbose=True, log_file=None)
+
+    started = time.monotonic()
+    progress("model_waiting", {"model": "model-a", "elapsed_seconds": 15})
+    enqueue_seconds = time.monotonic() - started
+    progress.flush()
+    progress.close()
+
+    assert enqueue_seconds < 0.02
+    assert rendered[0][0] == "model_waiting"
 
 
 def test_live_progress_recalibrates_cost_from_provider_responses(capsys) -> None:
@@ -704,6 +919,7 @@ def test_live_progress_recalibrates_cost_from_provider_responses(capsys) -> None
     )
     progress("tool_calls", {"model": "model-a", "count": 1, "tools": ["read_file"]})
     progress("model_waiting", {"model": "model-a", "elapsed_seconds": 6})
+    progress.flush()
 
     output = capsys.readouterr().out
     assert "$.5 this response" in output
@@ -711,6 +927,7 @@ def test_live_progress_recalibrates_cost_from_provider_responses(capsys) -> None
     assert "spent $.50" in output
     assert "Est. ~$25.87" in output
     assert "1 tool calls" in output
+    progress.close()
 
 
 def test_model_picker_builds_and_persists_multi_model_roster(
@@ -746,6 +963,59 @@ def test_model_picker_builds_and_persists_multi_model_roster(
         "vendor/first",
         "vendor/second",
     ]
+
+
+def test_fresh_roster_picker_includes_configured_inactive_providers(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[providers.openrouter]\n"
+        'kind = "openrouter"\n\n'
+        "[providers.codex-cli]\n"
+        'kind = "codex_cli"\n\n'
+        "[models.openrouter]\n"
+        'provider = "openrouter"\n'
+        'model = "vendor/router"\n'
+        "priority = 10\n\n"
+        "[models.codex-cli]\n"
+        'provider = "codex-cli"\n'
+        'model = "gpt-codex"\n'
+        "priority = 20\n",
+        encoding="utf-8",
+    )
+    base = load_engine_config(config_path, apply_model_defaults=False)
+    save_model_roster(base, [base.models["openrouter"]])
+    assert list(load_engine_config(config_path).models) == ["openrouter"]
+
+    answers = iter(["1", "1"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    asyncio.run(
+        _configure_fresh_model_roster(
+            base,
+            target_count=2,
+            discovered={
+                "openrouter": {
+                    "models": ["vendor/router"],
+                    "metadata": {},
+                    "account": {},
+                    "error": "",
+                },
+                "codex-cli": {
+                    "models": ["gpt-codex"],
+                    "metadata": {},
+                    "account": {},
+                    "error": "",
+                },
+            },
+        )
+    )
+
+    reloaded = load_engine_config(config_path)
+    assert {(model.provider, model.model) for model in reloaded.models.values()} == {
+        ("codex-cli", "gpt-codex"),
+        ("openrouter", "vendor/router"),
+    }
 
 
 def test_model_picker_counts_mixed_provider_core_models(monkeypatch, tmp_path: Path) -> None:

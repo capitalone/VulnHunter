@@ -403,8 +403,11 @@ def generate_config(*, allow_remote: bool = True) -> tuple[str, list[str]]:
             f"remote_provider_consent = {str(allow_remote).lower()}",
             "",
             "[sandbox]",
-            "# command_prefix must invoke a real OS/container sandbox before --execute.",
-            "command_prefix = []",
+            'backend = "docker"',
+            'image = "vulnhunter-sandbox:0.3.0"',
+            'memory = "2g"',
+            "cpus = 2.0",
+            "pids_limit = 256",
             "",
         ]
     )
@@ -465,6 +468,106 @@ def append_codex_cli_config(
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(original.rstrip() + "\n" + addition, encoding="utf-8")
     os.replace(temporary, path)
+
+
+def append_api_provider_config(
+    path: Path,
+    config: EngineConfig,
+    provider_name: str,
+) -> str:
+    """Append one newly detected API provider without storing its credential."""
+    specs = {
+        "openrouter": {
+            "kind": "openrouter",
+            "base_url": "https://openrouter.ai/api/v1",
+            "api_key_env": "OPENROUTER_API_KEY",
+            "model_env": "VULNHUNTER_OPENROUTER_MODEL",
+            "default_model": "openrouter/auto",
+            "model_alias": "openrouter",
+        },
+        "anthropic": {
+            "kind": "anthropic",
+            "base_url": "https://api.anthropic.com",
+            "api_key_env": "ANTHROPIC_API_KEY",
+            "model_env": "VULNHUNTER_ANTHROPIC_MODEL",
+            "default_model": "claude-opus-4-8",
+            "model_alias": "anthropic-primary",
+        },
+        "openai": {
+            "kind": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "api_key_env": "OPENAI_API_KEY",
+            "model_env": "VULNHUNTER_OPENAI_MODEL",
+            "default_model": "gpt-5",
+            "model_alias": "openai-primary",
+        },
+        "gemini": {
+            "kind": "gemini",
+            "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+            "api_key_env": "GEMINI_API_KEY",
+            "model_env": "VULNHUNTER_GEMINI_MODEL",
+            "default_model": "gemini-3.5-flash",
+            "model_alias": "gemini-primary",
+        },
+    }
+    if provider_name not in specs:
+        raise ValueError(f"unsupported API provider {provider_name!r}")
+    if provider_name in config.providers:
+        return ""
+    spec = specs[provider_name]
+    key_env = str(spec["api_key_env"])
+    if not os.environ.get(key_env):
+        raise ValueError(f"{key_env} is not available")
+
+    model_alias = str(spec["model_alias"])
+    if model_alias in config.models:
+        raise ValueError(f"model alias {model_alias!r} is already configured")
+    model_id = os.environ.get(
+        str(spec["model_env"]),
+        str(spec["default_model"]),
+    )
+    priority = max((model.priority for model in config.models.values()), default=0) + 10
+    addition = [
+        "",
+        f"# {provider_name.title()} API provider; the key remains in the environment.",
+        f"[providers.{provider_name}]",
+        f'kind = "{spec["kind"]}"',
+        f'base_url = "{spec["base_url"]}"',
+        f'api_key_env = "{key_env}"',
+        "remote = true",
+    ]
+    if provider_name == "openrouter":
+        addition.extend(
+            [
+                "",
+                "[providers.openrouter.headers]",
+                '"HTTP-Referer" = "https://github.com/JJsilvera1/Multi-VulnHunter"',
+                '"X-Title" = "VulnHunter"',
+            ]
+        )
+    addition.extend(
+        [
+            "",
+            f"[models.{model_alias}]",
+            f'provider = "{provider_name}"',
+            f'model = "{_toml_escape(model_id)}"',
+            "remote = true",
+            f"priority = {priority}",
+            'tool_mode = "native"',
+            "context_tokens = 128000",
+            "max_output_tokens = 8192",
+            "# Live model metadata supplies context and pricing after selection.",
+            "",
+        ]
+    )
+    original = path.read_text(encoding="utf-8")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        original.rstrip() + "\n" + "\n".join(addition),
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+    return model_id
 
 
 def write_env_example(path: Path, *, force: bool = False) -> None:

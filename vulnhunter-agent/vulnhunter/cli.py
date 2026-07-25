@@ -7,10 +7,12 @@ import asyncio
 import json
 import math
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import UTC, datetime
 from dataclasses import replace
@@ -29,6 +31,7 @@ from .config import (
 from .engine import ScanEngine, estimate_scan
 from .instructions import SUPPORTED_TOOLS, render_instructions
 from .inventory import build_inventory
+from .methodology import optional_tool_status
 from .models import (
     ModelSpec,
     RunStatus,
@@ -38,8 +41,15 @@ from .models import (
     SpecialistSpec,
 )
 from .providers import create_provider
+from .sandbox import (
+    DEFAULT_IMAGE,
+    build_sandbox_image,
+    docker_status,
+    start_docker_desktop,
+)
 from .setup import (
     PROVIDER_ENV_EXAMPLE,
+    append_api_provider_config,
     append_codex_cli_config,
     discover_codex_cli,
     doctor,
@@ -85,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
 Run 'vulnhunter help COMMAND' for detailed command help.
 """,
     )
-    parser.add_argument("--version", action="version", version="%(prog)s 0.2.0")
+    parser.add_argument("--version", action="version", version="%(prog)s 0.3.0")
     parser.add_argument(
         "--color",
         choices=("auto", "always", "never"),
@@ -100,7 +110,10 @@ Run 'vulnhunter help COMMAND' for detailed command help.
     help_parser.add_argument(
         "topic",
         nargs="?",
-        choices=("init", "doctor", "models", "scan", "instructions", "env-example"),
+        choices=(
+            "init", "doctor", "models", "scan", "sandbox",
+            "instructions", "env-example",
+        ),
         help="command to explain",
     )
 
@@ -169,6 +182,15 @@ Run 'vulnhunter help COMMAND' for detailed command help.
         "--json", action="store_true", help="emit machine-readable diagnostics"
     )
 
+    sandbox_parser = subparsers.add_parser(
+        "sandbox", help="build or diagnose the Docker validation sandbox"
+    )
+    sandbox_parser.add_argument("action", choices=("build", "doctor"))
+    sandbox_parser.add_argument("--image", default=DEFAULT_IMAGE)
+    sandbox_parser.add_argument(
+        "--json", action="store_true", help="emit machine-readable diagnostics"
+    )
+
     instructions_parser = subparsers.add_parser(
         "instructions", help="print a coding-tool walkthrough"
     )
@@ -179,6 +201,15 @@ Run 'vulnhunter help COMMAND' for detailed command help.
     scan_parser = subparsers.add_parser("scan", help="scan a local checkout or git URL")
     scan_parser.add_argument(
         "target", nargs="?", default=".", help="local checkout or Git clone URL"
+    )
+    scan_parser.add_argument(
+        "--engine",
+        choices=("native", "legacy"),
+        default="native",
+        help=(
+            "scanner implementation (default: native v2; legacy invokes the "
+            "transition Claude Agent SDK scanner for Git URLs)"
+        ),
     )
     scan_parser.add_argument(
         "--ref", help="optional Git branch, tag, or commit to scan in an isolated checkout"
@@ -223,6 +254,40 @@ Run 'vulnhunter help COMMAND' for detailed command help.
         help="allow disclosed target commands in a configured sandbox",
     )
     scan_parser.add_argument(
+        "--start-docker",
+        action="store_true",
+        help="start Docker Desktop if needed; requires --execute",
+    )
+    scan_parser.add_argument(
+        "--include-dormant",
+        action="store_true",
+        help="include disabled/.bak source as deferred security-review scope",
+    )
+    scan_parser.add_argument(
+        "--static-tools",
+        choices=("auto", "off", "required"),
+        default="auto",
+        help="optional deterministic scanners (default: auto)",
+    )
+    scan_parser.add_argument(
+        "--allow-network",
+        action="store_true",
+        help="allow sandbox outbound network access; requires --execute",
+    )
+    scan_parser.add_argument(
+        "--allow-private-network",
+        action="store_true",
+        help="also allow sandbox access to private/local networks",
+    )
+    scan_parser.add_argument(
+        "--threat-model",
+        help="reuse a threat_model.json whose repository digest matches",
+    )
+    scan_parser.add_argument(
+        "--sandbox-image",
+        help=f"Docker validation image (default: {DEFAULT_IMAGE})",
+    )
+    scan_parser.add_argument(
         "--yes", action="store_true", help="non-interactive mode; accept shown roster"
     )
     scan_parser.add_argument(
@@ -249,7 +314,23 @@ Run 'vulnhunter help COMMAND' for detailed command help.
     return parser
 
 
+def _configure_console_encoding() -> None:
+    """Keep Unicode progress output working when Windows redirects a stream."""
+
+    if os.name != "nt":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        try:
+            "◆✓→".encode(encoding)
+        except (LookupError, UnicodeEncodeError):
+            reconfigure = getattr(stream, "reconfigure", None)
+            if callable(reconfigure):
+                reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_console_encoding()
     parser = build_parser()
     args = parser.parse_args(argv)
     _set_color_mode(args.color)
@@ -274,6 +355,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "models":
             return asyncio.run(_run_models(args))
+        if args.command == "sandbox":
+            return _run_sandbox(args)
         if args.command == "instructions":
             print(render_instructions(args.tool))
             return 0
@@ -310,7 +393,46 @@ def _run_init(args: argparse.Namespace) -> int:
     if path.exists() and not args.force:
         print(f"Using existing VulnHunter config: {path}")
         print("Run with --force only if you want to regenerate and replace it.")
-        config = load_engine_config(path)
+        config = load_engine_config(path, apply_model_defaults=False)
+        detected_api_providers = [
+            (name, label, key_env)
+            for name, label, key_env in (
+                ("openrouter", "OpenRouter", "OPENROUTER_API_KEY"),
+                ("anthropic", "Anthropic", "ANTHROPIC_API_KEY"),
+                ("openai", "OpenAI API", "OPENAI_API_KEY"),
+                ("gemini", "Gemini API", "GEMINI_API_KEY"),
+            )
+            if os.environ.get(key_env) and name not in config.providers
+        ]
+        add_detected_api = bool(args.allow_remote)
+        if (
+            detected_api_providers
+            and not args.local_only
+            and not args.allow_remote
+            and sys.stdin.isatty()
+        ):
+            print("\nAdditional remote provider credentials were detected:")
+            for _name, label, key_env in detected_api_providers:
+                print(f"  - {label} ({key_env})")
+            print(
+                "Selected repository source will be sent only when one of these "
+                "providers is chosen in the displayed model roster."
+            )
+            add_detected_api = input(
+                "Add these providers to the existing config? [y/N]: "
+            ).strip().lower() in {"y", "yes"}
+        if add_detected_api and not args.local_only:
+            for provider_name, label, _key_env in detected_api_providers:
+                model_id = append_api_provider_config(
+                    path, config, provider_name
+                )
+                print(
+                    f"Added {label} provider without storing its API key "
+                    f"(default model {model_id})."
+                )
+                config = load_engine_config(
+                    path, apply_model_defaults=False
+                )
         codex_detection = discover_codex_cli()
         if codex_detection and "codex-cli" not in config.providers:
             add_codex = bool(args.allow_remote)
@@ -326,7 +448,7 @@ def _run_init(args: argparse.Namespace) -> int:
             if add_codex:
                 append_codex_cli_config(path, config, codex_detection)
                 print("Added Codex CLI provider without reading or storing OAuth tokens.")
-                config = load_engine_config(path)
+                config = load_engine_config(path, apply_model_defaults=False)
         elif codex_detection and "codex-cli" in config.providers:
             print(
                 "Codex CLI provider is already configured and will appear in the "
@@ -407,18 +529,31 @@ async def _run_guided_init_scan(path: Path, *, instructions: str | None) -> int:
     count = _ask_initial_model_count()
     base_config = load_engine_config(path, apply_model_defaults=False)
     await _configure_fresh_model_roster(base_config, target_count=count)
+    execute = _ask_execution_mode()
 
     while True:
         config = load_engine_config(path)
         checks = await doctor(config, probe_models=False)
-        _print_guided_scan_summary(config, target, git_ref, level)
+        _print_guided_scan_summary(
+            config, target, git_ref, level, execute=execute
+        )
         unhealthy = [row for row in checks if not row["ok"]]
         if unhealthy:
             print(_paint("\nProvider warnings:", _YELLOW))
             for row in unhealthy:
                 print(_paint(f"  - {row['alias']}: {row['detail']}", _YELLOW))
         answer = input(
-            "\nStart this scan? [Y]es / [C]hange / [N] save setup only: "
+            "\n"
+            + _paint(
+                "Continue to preflight and start if checks pass?", _WHITE_BOLD
+            )
+            + " "
+            + _paint("[Y]es", _GREEN_BOLD)
+            + " / "
+            + _paint("[C]hange", _YELLOW)
+            + " / "
+            + _paint("[N] save setup only", _DIM)
+            + ": "
         ).strip().lower()
         if answer in {"", "y", "yes"}:
             if unhealthy:
@@ -440,11 +575,18 @@ async def _run_guided_init_scan(path: Path, *, instructions: str | None) -> int:
         if answer not in {"c", "change"}:
             print("Choose Y to start, C to change, or N to save without scanning.")
             continue
-        print("\nChange configuration:")
-        print("  1. Repository target or Git ref")
-        print("  2. Scan depth")
-        print("  3. Core model team")
-        choice = input("Choose 1-3, or Enter to return: ").strip()
+        print("\n" + _paint("Change configuration", _WHITE_BOLD))
+        print(f"  {_paint('1.', _BLUE_BOLD)} {_paint('Repository target or Git ref', _CYAN_BOLD)}")
+        print(f"  {_paint('2.', _BLUE_BOLD)} {_paint('Scan depth', _YELLOW)}")
+        print(f"  {_paint('3.', _BLUE_BOLD)} {_paint('Core model team', _MAGENTA_BOLD)}")
+        print(
+            f"  {_paint('4.', _BLUE_BOLD)} "
+            f"{_paint('Validation mode', _GREEN_BOLD)}"
+        )
+        choice = input(
+            _paint("Choose 1-4", _WHITE_BOLD)
+            + _paint(", or Enter to return: ", _DIM)
+        ).strip()
         if choice == "1":
             target, git_ref = _ask_scan_target(current=target, current_ref=git_ref)
         elif choice == "2":
@@ -453,6 +595,8 @@ async def _run_guided_init_scan(path: Path, *, instructions: str | None) -> int:
             count = _ask_initial_model_count(default=len(config.models))
             base_config = load_engine_config(path, apply_model_defaults=False)
             await _configure_fresh_model_roster(base_config, target_count=count)
+        elif choice == "4":
+            execute = _ask_execution_mode(default_execute=execute)
 
     scan_argv = [
         "scan",
@@ -467,6 +611,10 @@ async def _run_guided_init_scan(path: Path, *, instructions: str | None) -> int:
     ]
     if git_ref:
         scan_argv.extend(["--ref", git_ref])
+    if execute:
+        # Selecting Docker validation in the walkthrough and confirming Y
+        # authorizes VulnHunter to start Desktop if it is currently stopped.
+        scan_argv.extend(["--execute", "--start-docker"])
     scan_args = build_parser().parse_args(scan_argv)
     return await _run_scan(scan_args)
 
@@ -504,39 +652,144 @@ def _ask_initial_model_count(*, default: int = 1) -> int:
     return count
 
 
+def _ask_execution_mode(*, default_execute: bool = False) -> bool:
+    default = 2 if default_execute else 1
+    print("\n" + _paint("Choose validation mode:", _WHITE_BOLD))
+    print(
+        f"  {_paint('1.', _BLUE_BOLD)} "
+        f"{_paint('Static/read-only', _GREEN_BOLD)} — do not run target code"
+    )
+    print(
+        f"  {_paint('2.', _BLUE_BOLD)} "
+        f"{_paint('Docker validation', _YELLOW)} — test suitable findings in "
+        "the isolated sandbox"
+    )
+    print(
+        "     VulnHunter checks Docker first and can start Docker Desktop if needed."
+    )
+    raw = input(f"Validation mode [1-2, default {default}]: ").strip()
+    if not raw:
+        return default_execute
+    if raw not in {"1", "2"}:
+        raise ValueError("validation mode must be 1 or 2")
+    return raw == "2"
+
+
 def _print_guided_scan_summary(
     config: EngineConfig,
     target: str,
     git_ref: str | None,
     level: ScanLevel,
+    *,
+    execute: bool = False,
 ) -> None:
     print("\n" + _paint("Scan configuration", _WHITE_BOLD))
-    print(f"  Repository: {target}")
-    print(f"  Git ref: {git_ref or 'current checkout / remote default'}")
-    print(f"  Depth: {level.value}")
-    print(f"  Core models: {len(config.models)}")
+    level_colors = {
+        ScanLevel.QUICK: _GREEN,
+        ScanLevel.STANDARD: _CYAN_BOLD,
+        ScanLevel.DEEP: _YELLOW,
+        ScanLevel.EXHAUSTIVE: _MAGENTA_BOLD,
+    }
+    print(
+        f"  {_paint('Repository:', _DIM)} "
+        f"{_paint(target, _CYAN_BOLD)}"
+    )
+    print(
+        f"  {_paint('Git ref:', _DIM)} "
+        f"{_paint(git_ref or 'current checkout / remote default', _YELLOW)}"
+    )
+    print(
+        f"  {_paint('Depth:', _DIM)} "
+        f"{_paint(level.value, level_colors[level])}"
+    )
+    print(
+        f"  {_paint('Core models:', _DIM)} "
+        f"{_paint(str(len(config.models)), _MAGENTA_BOLD)}"
+    )
     for index, model in enumerate(config.models.values(), start=1):
-        exposure = "REMOTE — source is sent" if model.remote else "local"
+        exposure = _paint(
+            "REMOTE — source is sent" if model.remote else "local",
+            _YELLOW if model.remote else _GREEN,
+        )
         reasoning = (
-            f", reasoning {model.reasoning_effort}"
+            ", " + _paint(f"reasoning {model.reasoning_effort}", _MAGENTA_BOLD)
             if model.reasoning_effort != "auto"
             else ""
         )
         print(
-            f"    {index}. {model.provider}/{model.model} "
+            f"    {_paint(f'{index}.', _DIM)} "
+            f"{_paint(f'{model.provider}/{model.model}', _CYAN_BOLD)} "
             f"({exposure}{reasoning})"
         )
-    print("  Execution: static/read-only")
+    print(
+        f"  {_paint('Execution:', _DIM)} "
+        + (
+            f"{_paint('Docker validation', _YELLOW)} "
+            f"({_paint('Desktop is checked before scanning', _CYAN_BOLD)})"
+            if execute
+            else f"{_paint('static/read-only', _GREEN_BOLD)}"
+        )
+    )
+    print("\n" + _paint("What happens next", _WHITE_BOLD))
+    print(
+        f"  {_paint('1.', _BLUE_BOLD)} Resolve an "
+        f"{_paint('immutable repository snapshot', _CYAN_BOLD)} and run "
+        f"{_paint('provider preflight', _GREEN)}."
+    )
+    print(
+        f"  {_paint('2.', _BLUE_BOLD)} Inventory "
+        f"{_paint('security surfaces', _MAGENTA_BOLD)} and generate a repository "
+        f"{_paint('threat model', _MAGENTA_BOLD)}."
+    )
+    print(
+        f"  {_paint('3.', _BLUE_BOLD)} Run "
+        f"{_paint('native security rules', _GREEN)}, then "
+        f"{_paint('isolated blind model hunts', _CYAN_BOLD)}."
+    )
+    print(
+        f"  {_paint('4.', _BLUE_BOLD)} "
+        f"{_paint('Challenge coverage gaps', _YELLOW)}; review, validate, and "
+        f"trace candidates."
+    )
+    print(
+        f"  {_paint('5.', _BLUE_BOLD)} Close the "
+        f"{_paint('coverage ledger', _GREEN_BOLD)} and write the report plus "
+        f"{_paint('manifest v2', _CYAN_BOLD)}."
+    )
+    print(
+        f"  {_paint('Optional scanners:', _BLUE_BOLD)} used when installed "
+        f"({_paint('auto mode', _YELLOW)}); "
+        f"{_paint('absence is recorded', _DIM)}."
+    )
+    print(
+        f"  {_paint('Target code:', _BLUE_BOLD)} "
+        + (
+            f"{_paint('may run only inside the Docker sandbox', _YELLOW)}. "
+            "Docker Desktop will be checked and started if needed."
+            if execute
+            else f"{_paint('not executed', _GREEN_BOLD)}. Use "
+            f"{_paint('--execute', _YELLOW)} later for "
+            f"{_paint('Docker-only validation', _CYAN_BOLD)}."
+        )
+    )
+    print(
+        f"  {_paint('Result rule:', _RED_BOLD)} failed or unclosed mandatory "
+        f"coverage is {_paint('INCOMPLETE_COVERAGE', _YELLOW)}, "
+        f"{_paint('never clean', _RED_BOLD)}."
+    )
 
 
 async def _run_doctor(args: argparse.Namespace) -> int:
     config = load_engine_config(args.config)
     rows = await doctor(config)
     git_ok = shutil.which("git") is not None
+    sandbox = docker_status(config.sandbox.image)
+    static_tools = _static_tool_details()
     payload = {
         "config": str(config.source_path),
         "git": git_ok,
-        "sandbox": config.sandbox.available,
+        "sandbox": sandbox,
+        "static_tools": static_tools,
         "models": rows,
     }
     if args.json:
@@ -546,8 +799,36 @@ async def _run_doctor(args: argparse.Namespace) -> int:
         print(f"Git: {'ok' if git_ok else 'missing'}")
         print(
             "Execution sandbox: "
-            + ("configured" if config.sandbox.available else "not configured (static scans work)")
+            + (
+                f"ready ({sandbox['image']})"
+                if sandbox["available"] and sandbox["image_available"]
+                else f"not ready ({sandbox['detail']}; static scans work)"
+            )
         )
+        if sandbox.get("available"):
+            isolation = sandbox.get("network_isolation", {})
+            print(
+                "  resource limits: "
+                + ("supported" if sandbox.get("resource_policy_supported") else "unknown")
+            )
+            print(
+                "  network: disabled by default; public-only egress "
+                + (
+                    "supported"
+                    if isolation.get("public_only_supported")
+                    else "not enforceable on this Docker host"
+                )
+            )
+        print("Optional static tools:")
+        for name, detail in static_tools.items():
+            print(
+                f"  {name}: "
+                + (
+                    f"available ({detail['version']})"
+                    if detail["available"]
+                    else "unavailable"
+                )
+            )
         for row in rows:
             marker = "✓" if row["ok"] else "✗"
             locality = "remote" if row["remote"] else "local"
@@ -570,7 +851,144 @@ async def _run_doctor(args: argparse.Namespace) -> int:
     return 0 if git_ok and all(bool(row["ok"]) for row in rows) else 4
 
 
+def _static_tool_details() -> dict[str, dict[str, Any]]:
+    details: dict[str, dict[str, Any]] = {}
+    for name, available in optional_tool_status().items():
+        executable = (
+            shutil.which("ast-grep") or shutil.which("sg")
+            if name == "ast-grep"
+            else shutil.which(name)
+        )
+        version = "unknown"
+        if available and executable:
+            try:
+                result = subprocess.run(
+                    [executable, "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    shell=False,
+                    check=False,
+                )
+                version = (
+                    result.stdout.strip().splitlines()[0]
+                    if result.stdout.strip()
+                    else result.stderr.strip().splitlines()[0]
+                    if result.stderr.strip()
+                    else "unknown"
+                )
+            except (OSError, subprocess.SubprocessError):
+                version = "unknown"
+        details[name] = {"available": available, "version": version}
+    return details
+
+
+def _run_sandbox(args: argparse.Namespace) -> int:
+    if args.action == "build":
+        context = Path(__file__).resolve().parent / "sandbox_image"
+        build_sandbox_image(context, args.image)
+    status = docker_status(args.image)
+    if args.json:
+        print(json.dumps(status, indent=2))
+    else:
+        print(f"Docker: {'ok' if status['available'] else 'unavailable'}")
+        print(
+            f"Sandbox image {status['image']}: "
+            + ("ready" if status["image_available"] else "not built")
+        )
+        print(f"Detail: {status['detail']}")
+    return 0 if status["available"] and status["image_available"] else 4
+
+
+async def _ensure_execute_sandbox(
+    *,
+    image: str,
+    non_interactive: bool,
+    start_requested: bool,
+    wait_seconds: float = 120.0,
+) -> None:
+    """Verify Docker before model dispatch and optionally start Desktop."""
+
+    status = await asyncio.to_thread(docker_status, image)
+    if not status["available"]:
+        if not status.get("installed"):
+            raise ValueError(
+                "--execute requires Docker, but the Docker CLI was not found. "
+                "Install Docker Desktop, start it, then run "
+                "`vulnhunter sandbox build`."
+            )
+
+        print(
+            _paint(
+                "Docker check: Docker is installed, but Docker Desktop is not running.",
+                _YELLOW,
+            ),
+            flush=True,
+        )
+        should_start = start_requested
+        if (
+            not should_start
+            and not non_interactive
+            and bool(getattr(sys.stdin, "isatty", lambda: False)())
+        ):
+            answer = input("Start Docker Desktop for you now? [Y/n]: ").strip().lower()
+            should_start = answer in {"", "y", "yes"}
+        if not should_start:
+            raise ValueError(
+                "Start Docker Desktop and wait until it reports that the engine "
+                "is running, then retry. For automation, add `--start-docker`."
+            )
+        if not status.get("desktop_installed"):
+            raise ValueError(
+                "Docker is unavailable and VulnHunter could not locate Docker "
+                "Desktop to start it. Start your Docker daemon manually, then retry."
+            )
+        started, detail = start_docker_desktop()
+        if not started:
+            raise ValueError(detail)
+        print(_paint("Starting Docker Desktop…", _CYAN_BOLD), flush=True)
+        deadline = time.monotonic() + max(1.0, wait_seconds)
+        while time.monotonic() < deadline:
+            await asyncio.sleep(min(3.0, max(0.1, wait_seconds)))
+            status = await asyncio.to_thread(docker_status, image)
+            if status["available"]:
+                break
+            print(_paint("  Waiting for the Docker engine…", _GRAY), flush=True)
+        if not status["available"]:
+            raise ValueError(
+                "Docker Desktop was started, but its engine did not become ready "
+                f"within {round(wait_seconds)} seconds. Open Docker Desktop, check "
+                "its status, and retry."
+            )
+
+    version = status.get("version") or "unknown version"
+    print(_paint(f"✓ Docker check passed ({version})", _GREEN_BOLD), flush=True)
+    if not status["image_available"]:
+        raise ValueError(
+            f"Docker Desktop is running, but sandbox image {image!r} is not built. "
+            "Run `vulnhunter sandbox build`, then retry the scan."
+        )
+
+
 async def _run_scan(args: argparse.Namespace) -> int:
+    if args.engine == "legacy":
+        if not str(args.target).startswith(("https://", "http://", "git@")):
+            raise ValueError(
+                "--engine legacy accepts a Git repository URL; use the native "
+                "engine for local paths"
+            )
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "agent",
+            "--mode=scan",
+            str(args.target),
+            "--engine",
+            "legacy",
+            "--no-publish",
+            "--no-issues",
+        )
+        return int(await process.wait())
     config = load_engine_config(args.config)
     prompted = 0
     if args.level:
@@ -590,17 +1008,40 @@ async def _run_scan(args: argparse.Namespace) -> int:
             "logging_started",
             {"path": str(Path(args.log_file).expanduser().resolve())},
         )
+    if args.allow_network and not args.execute:
+        raise ValueError("--allow-network requires --execute")
+    if args.allow_private_network and not args.allow_network:
+        raise ValueError("--allow-private-network requires --allow-network")
+    if args.start_docker and not args.execute:
+        raise ValueError("--start-docker requires --execute")
+    if args.execute:
+        await _ensure_execute_sandbox(
+            image=args.sandbox_image or config.sandbox.image,
+            non_interactive=bool(args.yes),
+            start_requested=bool(args.start_docker),
+        )
     progress("repository_prepare_started", {"target": args.target})
     repository = _resolve_target(
         args.target, resume=args.resume, git_ref=getattr(args, "ref", None)
     )
     progress("repository_prepare_complete", {"repository": str(repository)})
     progress("inventory_started", {"repository": str(repository)})
-    inventory = build_inventory(repository)
+    inventory = build_inventory(
+        repository, include_dormant=bool(args.include_dormant)
+    )
     progress(
         "inventory_preflight_complete",
         {"files": len(inventory.files), "bytes": inventory.total_bytes},
     )
+    if args.static_tools == "required":
+        missing = [
+            name for name, available in optional_tool_status().items()
+            if not available
+        ]
+        if missing:
+            raise ValueError(
+                "--static-tools required but unavailable: " + ", ".join(missing)
+            )
     progress("provider_check_started", {"models": len(config.models)})
     health = await _model_health(config, progress=progress)
     progress("provider_check_complete", {"models": len(health)})
@@ -657,18 +1098,30 @@ async def _run_scan(args: argparse.Namespace) -> int:
         )
         prompted += 1
         if count == 0:
-            await _configure_models_interactively(config)
+            base_config = load_engine_config(
+                args.config, apply_model_defaults=False
+            )
+            target_count = _ask_initial_model_count(
+                default=min(max(len(config.models), 1), 3)
+            )
+            await _configure_fresh_model_roster(
+                base_config,
+                target_count=target_count,
+            )
             config = load_engine_config(args.config)
             health = await _model_health(config)
             healthy_aliases = [alias for alias, ok, _detail in health if ok]
-            if not healthy_aliases:
-                raise RuntimeError("no selected model passed provider health checks")
+            failed_health = [
+                f"{alias}: {detail}" for alias, ok, detail in health if not ok
+            ]
+            if len(healthy_aliases) < target_count:
+                raise RuntimeError(
+                    f"selected {target_count} models, but only "
+                    f"{len(healthy_aliases)} passed provider health checks"
+                    + (f" ({'; '.join(failed_health)})" if failed_health else "")
+                )
             specialists = _resolve_specialists(config, args.specialist)
-            count = _ask_model_count(
-                config, healthy_aliases, inventory, level, specialists
-            )
-            if count == 0:
-                raise ValueError("model customization was already completed")
+            count = target_count
         selected_aliases = _choose_team_aliases(config, healthy_aliases, count)
 
     selected = [config.models[alias] for alias in selected_aliases]
@@ -690,6 +1143,8 @@ async def _run_scan(args: argparse.Namespace) -> int:
         inventory,
         estimate,
         execute=bool(args.execute),
+        allow_network=bool(args.allow_network),
+        allow_private_network=bool(args.allow_private_network),
     )
     progress(
         "scan_estimate",
@@ -704,6 +1159,13 @@ async def _run_scan(args: argparse.Namespace) -> int:
             "assignments_low": estimate.get("assignments_low"),
             "assignments_high": estimate.get("assignments_high"),
             "partitions": estimate.get("partitions"),
+            "effective_workers": estimate.get("effective_workers"),
+            "repository_lines": estimate.get("repository_lines"),
+            "repository_symbols": estimate.get("repository_symbols"),
+            "base_system_prompt_tokens": estimate.get(
+                "base_system_prompt_tokens"
+            ),
+            "structural_factor": estimate.get("structural_factor"),
             "basis": estimate.get("basis"),
             "confidence": estimate.get("confidence"),
         },
@@ -729,12 +1191,19 @@ async def _run_scan(args: argparse.Namespace) -> int:
             max_workers=max(1, args.max_workers),
         ),
         execute=bool(args.execute),
+        include_dormant=bool(args.include_dormant),
+        static_tools=str(args.static_tools),
+        allow_network=bool(args.allow_network),
+        allow_private_network=bool(args.allow_private_network),
+        threat_model_path=args.threat_model,
+        sandbox_image=args.sandbox_image,
         results_dir=args.resume or args.results_dir,
         resume=bool(args.resume),
     )
     retried_incomplete = False
     while True:
         manifest, results_dir = await ScanEngine(config, progress=progress).scan(request)
+        progress.flush()
         incomplete = str(manifest["status"]).startswith("INCOMPLETE")
         automatic_retry_pending = (
             incomplete and not retried_incomplete and bool(args.retry_incomplete)
@@ -775,6 +1244,7 @@ async def _run_scan(args: argparse.Namespace) -> int:
             resume=True,
         )
         retried_incomplete = True
+    progress.close()
     return _status_exit(manifest["status"])
 
 
@@ -956,8 +1426,11 @@ def _live_scan_summary(details: dict[str, Any]) -> str:
         forecast = f"Est. ~{_format_status_cost(float(estimate.get('cost_high_usd', 0)))}"
     else:
         forecast = "Est. unknown"
+    phase_eta = details.get("phase_eta_seconds")
     high_minutes = estimate.get("minutes_high")
-    if high_minutes is not None:
+    if phase_eta is not None:
+        eta = f"ETA ~{_format_elapsed(float(phase_eta))} this phase"
+    elif high_minutes is not None:
         remaining = float(high_minutes) * 60 - elapsed
         eta = (
             f"ETA ~{_format_elapsed(remaining)}"
@@ -1077,10 +1550,10 @@ def _set_color_mode(mode: str) -> None:
 
 
 def _colors_enabled() -> bool:
-    if _COLOR_MODE == "never" or "NO_COLOR" in os.environ:
-        return False
     if _COLOR_MODE == "always":
         return True
+    if _COLOR_MODE == "never" or "NO_COLOR" in os.environ:
+        return False
     return bool(sys.stdout.isatty() and os.environ.get("TERM", "") != "dumb")
 
 
@@ -1132,12 +1605,30 @@ def _make_progress_handler(
         "cached_input_tokens": 0,
         "estimate": {},
         "estimate_exceeded_reported": False,
+        "phase": "",
+        "phase_assignments": 0,
+        "phase_completed": 0,
+        "phase_durations": [],
     }
 
-    def handle(event: str, details: dict[str, Any]) -> None:
+    def process(event: str, details: dict[str, Any]) -> None:
         if event == "scan_estimate":
             telemetry["started_at"] = time.monotonic()
             telemetry["estimate"] = dict(details)
+        elif event == "phase_started":
+            telemetry["phase"] = str(details.get("phase", ""))
+            telemetry["phase_assignments"] = int(details.get("assignments", 0))
+            telemetry["phase_completed"] = 0
+            telemetry["phase_durations"] = []
+        elif event in {
+            "assignment_complete",
+            "assignment_failed",
+            "assignment_resumed",
+        }:
+            telemetry["phase_completed"] += 1
+            duration = details.get("duration_seconds")
+            if duration is not None and float(duration) > 0:
+                telemetry["phase_durations"].append(float(duration))
         elif event == "tool_calls":
             telemetry["tool_calls"] += int(details.get("count", 0))
         elif event == "model_request_complete":
@@ -1165,9 +1656,28 @@ def _make_progress_handler(
                 "output_tokens_so_far": telemetry["output_tokens"],
                 "cached_input_tokens_so_far": telemetry["cached_input_tokens"],
                 "estimate": telemetry["estimate"],
+                "current_phase": telemetry["phase"],
+                "phase_assignments": telemetry["phase_assignments"],
+                "phase_completed": telemetry["phase_completed"],
             }
         )
         estimate = telemetry["estimate"]
+        phase_durations = telemetry["phase_durations"]
+        phase_remaining = max(
+            0,
+            int(telemetry["phase_assignments"])
+            - int(telemetry["phase_completed"]),
+        )
+        if phase_durations and phase_remaining:
+            ordered = sorted(phase_durations)
+            median_duration = ordered[len(ordered) // 2]
+            effective_workers = max(
+                1, int(estimate.get("effective_workers", 1))
+            )
+            enriched["phase_eta_seconds"] = (
+                median_duration * phase_remaining / effective_workers
+            )
+            enriched["phase_assignment_median_seconds"] = median_duration
         priced_requests = int(telemetry["priced_requests"])
         if priced_requests and estimate.get("requests_high") is not None:
             average_cost = telemetry["observed_cost_usd"] / priced_requests
@@ -1205,6 +1715,44 @@ def _make_progress_handler(
         if not quiet:
             _render_progress(event, enriched, verbose=verbose)
 
+    event_queue: queue.SimpleQueue[Any] = queue.SimpleQueue()
+    stop = object()
+
+    def render_worker() -> None:
+        while True:
+            item = event_queue.get()
+            if item is stop:
+                return
+            if isinstance(item, threading.Event):
+                item.set()
+                continue
+            event, details = item
+            process(str(event), dict(details))
+
+    worker = threading.Thread(
+        target=render_worker,
+        name="vulnhunter-progress",
+        daemon=True,
+    )
+    worker.start()
+
+    def handle(event: str, details: dict[str, Any]) -> None:
+        # SimpleQueue.put is non-blocking. A slow terminal or log destination
+        # can no longer stall provider requests or the orchestration event loop.
+        event_queue.put((event, dict(details)))
+
+    def flush() -> None:
+        barrier = threading.Event()
+        event_queue.put(barrier)
+        barrier.wait(timeout=30)
+
+    def close() -> None:
+        flush()
+        event_queue.put(stop)
+        worker.join(timeout=5)
+
+    handle.flush = flush  # type: ignore[attr-defined]
+    handle.close = close  # type: ignore[attr-defined]
     return handle
 
 
@@ -1331,13 +1879,36 @@ def _render_progress(
             f"{float(details['delay_seconds']):.1f}s"
         )
     elif event == "phase_started":
-        print("\n" + _paint(f"◆ {details['phase']}", _BLUE_BOLD))
+        count = int(details.get("assignments", 0))
+        suffix = f" ({count} assignments)" if count else ""
+        print(
+            "\n"
+            + _paint(f"◆ {details['phase']}", _BLUE_BOLD)
+            + _paint(suffix, _DIM)
+        )
     elif event == "assignment_started":
         print(
             f"  {_paint('→', _BLUE_BOLD)} "
             f"{_paint(str(details['model']), _CYAN_BOLD)} running "
             f"{_paint(str(details['kind']), _MAGENTA_BOLD)} "
             f"{_paint(str(details['assignment']), _DIM)}"
+        )
+    elif event == "assignment_prompt_ready" and verbose:
+        print(
+            "    "
+            + _paint("·", _BLUE_BOLD)
+            + " initial prompt "
+            + _paint(
+                f"~{int(details.get('initial_prompt_tokens_estimate', 0)):,} tokens",
+                _WHITE_BOLD,
+            )
+            + _paint(
+                " (system "
+                f"~{int(details.get('system_prompt_tokens_estimate', 0)):,}; "
+                "task "
+                f"~{int(details.get('task_prompt_tokens_estimate', 0)):,})",
+                _DIM,
+            )
         )
     elif event == "model_waiting":
         print(
@@ -1586,7 +2157,7 @@ def _choose_team_aliases(
 
 
 async def _run_models(args: argparse.Namespace) -> int:
-    config = load_engine_config(args.config)
+    config = load_engine_config(args.config, apply_model_defaults=False)
     if not args.json and not args.list and sys.stdin.isatty():
         _render_progress(
             "model_discovery_started",
@@ -1625,11 +2196,15 @@ async def _run_models(args: argparse.Namespace) -> int:
                         )
                     )
         return 0 if all(not row["error"] for row in discovered.values()) else 4
-    await _configure_models_interactively(
-        config,
-        provider_filter=args.provider,
-        discovered=discovered,
-    )
+    if args.provider:
+        await _configure_models_interactively(
+            config,
+            provider_filter=args.provider,
+            discovered=discovered,
+            offer_additional_models=False,
+        )
+    else:
+        await _configure_fresh_model_roster(config, discovered=discovered)
     return 0
 
 
@@ -1787,6 +2362,16 @@ async def _configure_fresh_model_roster(
                 output_cost_per_million=(
                     float(details["output_cost_per_million"])
                     if details.get("output_cost_per_million") is not None
+                    else None
+                ),
+                cache_read_cost_per_million=(
+                    float(details["cache_read_cost_per_million"])
+                    if details.get("cache_read_cost_per_million") is not None
+                    else None
+                ),
+                cache_write_cost_per_million=(
+                    float(details["cache_write_cost_per_million"])
+                    if details.get("cache_write_cost_per_million") is not None
                     else None
                 ),
                 reasoning_effort=reasoning,
@@ -2014,6 +2599,16 @@ async def _configure_models_interactively(
             output_cost_per_million=(
                 float(selected_details["output_cost_per_million"])
                 if selected_details.get("output_cost_per_million") is not None
+                else None
+            ),
+            cache_read_cost_per_million=(
+                float(selected_details["cache_read_cost_per_million"])
+                if selected_details.get("cache_read_cost_per_million") is not None
+                else None
+            ),
+            cache_write_cost_per_million=(
+                float(selected_details["cache_write_cost_per_million"])
+                if selected_details.get("cache_write_cost_per_million") is not None
                 else None
             ),
             reasoning_effort=selected_reasoning,
@@ -2370,12 +2965,16 @@ def _print_preflight(
     estimate: dict[str, Any],
     *,
     execute: bool,
+    allow_network: bool = False,
+    allow_private_network: bool = False,
 ) -> None:
     print("\nVulnHunter preflight")
     print(f"  Level: {level.value}")
     print(
         f"  Repository: {inventory.root} "
-        f"({len(inventory.files)} production files, {inventory.total_bytes} bytes)"
+        f"({len(inventory.files)} production files, "
+        f"{inventory.line_count:,} lines, ~{inventory.symbol_count:,} callable "
+        f"symbols, {inventory.total_bytes:,} bytes)"
     )
     print(f"  Core hunters: {len(models)}")
     for model in models:
@@ -2410,6 +3009,11 @@ def _print_preflight(
     print(
         f"  Estimate confidence: {estimate.get('confidence', 'unknown')}"
     )
+    print(
+        "  Stable system prompt: "
+        f"~{int(estimate.get('base_system_prompt_tokens', 0)):,} tokens; "
+        "dynamic repository/tool context is estimated separately"
+    )
     if estimate["hardware_cost_high_usd"] > 0:
         print(
             f"  Estimated local hardware cost: "
@@ -2428,6 +3032,18 @@ def _print_preflight(
             else "static/read-only"
         )
     )
+    if allow_private_network:
+        print(
+            _paint(
+                "  WARNING: sandbox access to private/local networks is explicitly "
+                "enabled; target code may reach internal services.",
+                _YELLOW,
+            )
+        )
+    elif allow_network:
+        print("  Network: controlled public egress requested; private ranges blocked")
+    else:
+        print("  Network: disabled")
 
 
 def _resolve_target(

@@ -1,0 +1,8 @@
+id: vulnhunter-python-shell-true
+language: Python
+rule:
+  any:
+    - pattern: subprocess.run($$$ARGS, shell=True, $$$REST)
+    - pattern: subprocess.Popen($$$ARGS, shell=True, $$$REST)
+message: Subprocess invocation enables shell parsing
+severity: error

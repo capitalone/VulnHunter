@@ -38,8 +38,11 @@ def render_instructions(tool: str) -> str:
    vulnhunter init
    vulnhunter doctor
 
-   `init` queries provider model catalogs and saves the selected defaults. Use
-   `vulnhunter models` later to search or page through current model IDs.
+   `init` queries provider model catalogs and saves the selected defaults. Its
+   walkthrough asks for the repository/ref, depth, one-to-three model roster,
+   reasoning settings, and static versus Docker validation. The final Change
+   menu can revise those choices before the scan starts. Use `vulnhunter
+   models` later to search or page through current model IDs.
    If Codex CLI is installed, `codex login` can provide an optional
    ChatGPT/Codex-plan provider without exposing its OAuth token to VulnHunter.
    Reasoning-capable models also offer an `auto` or explicit effort selector.
@@ -53,13 +56,31 @@ unattended use:
 
    vulnhunter scan . --level standard --models 3 --yes --json
 
+After model selection, VulnHunter resolves an immutable repository snapshot,
+runs provider and workload preflight, creates a threat model and mandatory
+security-surface ledger, performs deterministic checks and blind hunts,
+challenges gaps, validates candidates, analyzes attack paths, and closes the
+coverage ledger. Static/read-only is the default; selecting a model never
+authorizes target execution. Failed assignments or unclosed mandatory surfaces
+produce INCOMPLETE_COVERAGE rather than a clean result.
+
 Wait for the process to exit, then read the printed results directory. The stable
-machine contract is `<results>/run_manifest.json`; the human report is
-`<results>/README.md`.
+machine contract is `<results>/run_manifest.json` schema version 2; the human
+report is `<results>/README.md`. Threat-model, security-surface, validation, and
+attack-path artifacts are linked from those files.
+
+Scans are static and read-only by default. Target execution requires explicit
+user authorization, `vulnhunter sandbox build`, and `--execute`; it occurs only
+inside the Docker sandbox. With `--execute`, VulnHunter checks Docker before
+repository preparation or model dispatch. Interactive use offers to start a
+stopped Docker Desktop and waits for it. Automation may use
+`--execute --start-docker --yes`; a missing Docker installation or sandbox image
+still stops preflight with setup instructions. Never substitute host execution.
 
 Status handling:
 
-- COMPLETE_CLEAN: completed coverage with no confirmed finding.
+- COMPLETE_CLEAN: completed coverage, no unresolved mandatory surface, and no
+  reportable or deferred finding.
 - COMPLETE_FINDINGS: completed coverage with confirmed findings.
 - COMPLETE_CONDITIONAL: completed coverage with conditional or unresolved candidates;
   do not call it clean.

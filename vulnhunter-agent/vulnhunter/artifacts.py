@@ -13,10 +13,16 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .models import Assignment, Candidate, Review, RunStatus, Usage
+from .methodology import (
+    StaticSeed,
+    SurfaceLedgerRow,
+    ThreatModel,
+    render_threat_model,
+)
+from .models import Assignment, Candidate, FindingDisposition, Review, RunStatus, Usage
 
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 
 class ArtifactStore:
@@ -26,6 +32,9 @@ class ArtifactStore:
         self.candidates_dir = self.results_dir / "candidates"
         self.reviews_dir = self.results_dir / "reviews"
         self.disagreements_dir = self.results_dir / "disagreements"
+        self.validation_dir = self.results_dir / "validation"
+        self.attack_paths_dir = self.results_dir / "attack_paths"
+        self.validation_artifacts_dir = self.results_dir / "validation_artifacts"
         self.poc_dir = self.results_dir / "poc"
         self.exploit_tests_dir = self.results_dir / "exploit_tests"
         for directory in (
@@ -34,10 +43,111 @@ class ArtifactStore:
             self.candidates_dir,
             self.reviews_dir,
             self.disagreements_dir,
+            self.validation_dir,
+            self.attack_paths_dir,
+            self.validation_artifacts_dir,
             self.poc_dir,
             self.exploit_tests_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
+
+    def write_threat_model(self, threat_model: ThreatModel) -> None:
+        document = {"schema_version": SCHEMA_VERSION, **threat_model.to_dict()}
+        self._validate_named("threat_model.schema.json", document)
+        self.write_json(
+            self.results_dir / "threat_model.json",
+            document,
+        )
+        (self.results_dir / "threat_model.md").write_text(
+            render_threat_model(threat_model), encoding="utf-8"
+        )
+
+    def write_surface_ledger(
+        self,
+        rows: list[SurfaceLedgerRow],
+        candidates: list[Candidate] | None = None,
+    ) -> None:
+        surface_documents = [
+            {"schema_version": SCHEMA_VERSION, **row.to_dict()} for row in rows
+        ]
+        for document in surface_documents:
+            self._validate_named("security_surface.schema.json", document)
+        self.write_jsonl(
+            self.results_dir / "security_surfaces.jsonl",
+            surface_documents,
+        )
+        coverage_rows = [
+            {
+                "schema_version": SCHEMA_VERSION,
+                "record_type": "surface",
+                **row.to_dict(),
+            }
+            for row in rows
+        ]
+        for candidate in candidates or []:
+            instances = _candidate_instances(candidate)
+            for index, instance in enumerate(instances, 1):
+                coverage_rows.append(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "record_type": "candidate_instance",
+                        "instance_id": (
+                            f"{candidate.candidate_id}-INSTANCE-{index:03d}"
+                        ),
+                        "candidate_id": candidate.candidate_id,
+                        "file": str(
+                            instance.get("file") or instance.get("path") or ""
+                        ),
+                        "line": instance.get("line"),
+                        "disposition": str(candidate.disposition),
+                        "validation_path": (
+                            f"validation/{candidate.candidate_id}.json"
+                            if candidate.validation
+                            else None
+                        ),
+                    }
+                )
+        self.write_jsonl(
+            self.results_dir / "coverage_ledger.jsonl",
+            coverage_rows,
+        )
+
+    def write_static_seeds(self, seeds: list[StaticSeed]) -> None:
+        documents = [
+            {"schema_version": SCHEMA_VERSION, **seed.to_dict()} for seed in seeds
+        ]
+        for document in documents:
+            self._validate_named("static_seed.schema.json", document)
+        self.write_jsonl(
+            self.results_dir / "static_seeds.jsonl",
+            documents,
+        )
+
+    def write_validation(self, candidate: Candidate) -> None:
+        if not candidate.validation:
+            return
+        document = {
+            "schema_version": SCHEMA_VERSION,
+            "candidate_id": candidate.candidate_id,
+            **candidate.validation,
+        }
+        self._validate_named("validation_report.schema.json", document)
+        self.write_json(
+            self.validation_dir / f"{candidate.candidate_id}.json", document
+        )
+
+    def write_attack_path(self, candidate: Candidate) -> None:
+        if not candidate.attack_path:
+            return
+        document = {
+            "schema_version": SCHEMA_VERSION,
+            "candidate_id": candidate.candidate_id,
+            **candidate.attack_path,
+        }
+        self._validate_named("attack_path_report.schema.json", document)
+        self.write_json(
+            self.attack_paths_dir / f"{candidate.candidate_id}.json", document
+        )
 
     def write_assignment(self, assignment: Assignment, payload: dict[str, Any]) -> None:
         self._validate_named("assignment.schema.json", assignment.to_dict())
@@ -108,8 +218,25 @@ class ArtifactStore:
         usage: Usage,
         coverage: dict[str, Any],
         limits: dict[str, Any],
+        threat_model: ThreatModel | None = None,
+        surface_ledger: list[SurfaceLedgerRow] | None = None,
+        static_seeds: list[StaticSeed] | None = None,
+        tooling: dict[str, Any] | None = None,
+        sandbox: dict[str, Any] | None = None,
         incomplete_reason: str = "",
     ) -> dict[str, Any]:
+        surface_ledger = surface_ledger or []
+        static_seeds = static_seeds or []
+        dispositions = {
+            value: sum(str(row.disposition) == value for row in candidates)
+            for value in (
+                "REPORTABLE",
+                "DEFERRED",
+                "SUPPRESSED",
+                "NOT_APPLICABLE",
+                "UNRESOLVED",
+            )
+        }
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "run_id": run_id,
@@ -121,6 +248,42 @@ class ArtifactStore:
             "usage": asdict(usage),
             "limits": limits,
             "coverage": coverage,
+            "phases": _phase_summary(assignments),
+            "threat_model": {
+                "path": "threat_model.json",
+                "markdown_path": "threat_model.md",
+                "repository_digest": (
+                    threat_model.repository_digest if threat_model else ""
+                ),
+                "complete": bool(threat_model and threat_model.model_provenance),
+            },
+            "security_surfaces": {
+                "total": len(surface_ledger),
+                "mandatory": sum(row.mandatory for row in surface_ledger),
+                "unresolved_mandatory": [
+                    row.surface_id
+                    for row in surface_ledger
+                    if row.mandatory and str(row.disposition) == "UNRESOLVED"
+                ],
+                "path": "security_surfaces.jsonl",
+                "coverage_ledger_path": "coverage_ledger.jsonl",
+                "instance_rows": sum(
+                    len(_candidate_instances(row))
+                    for row in candidates
+                ),
+            },
+            "tooling": tooling or {
+                "native_rules": True,
+                "native_seed_count": len(static_seeds),
+                "optional_tools": [],
+                "seed_path": "static_seeds.jsonl",
+            },
+            "sandbox": sandbox or {
+                "enabled": False,
+                "backend": "docker",
+                "network": "none",
+            },
+            "dispositions": dispositions,
             "assignments": {
                 "total": len(assignments),
                 "completed": sum(row.status == "COMPLETED" for row in assignments),
@@ -134,11 +297,22 @@ class ArtifactStore:
                     "severity": row.severity,
                     "cwe": row.cwe,
                     "verdict": str(row.verdict),
+                    "disposition": str(row.disposition),
                     "discovered_by": row.discovered_by,
                     "reviews": row.reviews,
+                    "validation_path": (
+                        f"validation/{row.candidate_id}.json"
+                        if row.validation
+                        else None
+                    ),
+                    "attack_path": (
+                        f"attack_paths/{row.candidate_id}.json"
+                        if row.attack_path
+                        else None
+                    ),
                 }
                 for row in candidates
-                if str(row.verdict) != "REJECTED"
+                if str(row.disposition) != "SUPPRESSED"
             ],
             "reviews": len(reviews),
             "incomplete_reason": incomplete_reason,
@@ -147,6 +321,14 @@ class ArtifactStore:
         self._validate_named("provider_usage.schema.json", asdict(usage))
         self._validate_manifest(manifest)
         self.write_json(self.results_dir / "run_manifest.json", manifest)
+        if threat_model:
+            self.write_threat_model(threat_model)
+        if surface_ledger:
+            self.write_surface_ledger(surface_ledger, candidates)
+        self.write_static_seeds(static_seeds)
+        for candidate in candidates:
+            self.write_validation(candidate)
+            self.write_attack_path(candidate)
         self._write_pocs(candidates)
         self._write_report(manifest, candidates, reviews)
         self._write_legacy_manifest(run_id, status, candidates, usage)
@@ -162,6 +344,26 @@ class ArtifactStore:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(value, handle, indent=2, sort_keys=True)
                 handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        except BaseException:
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+            raise
+
+    @staticmethod
+    def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(
+            dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row, sort_keys=True) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, path)
@@ -194,7 +396,12 @@ class ArtifactStore:
 
     def _write_pocs(self, candidates: list[Candidate]) -> None:
         for index, candidate in enumerate(
-            [row for row in candidates if str(row.verdict) == "CONFIRMED"], 1
+            [
+                row
+                for row in candidates
+                if str(row.disposition) == FindingDisposition.REPORTABLE
+            ],
+            1,
         ):
             vuln_id = f"VULN-{index:03d}"
             slug = _slug(candidate.title)
@@ -213,9 +420,20 @@ class ArtifactStore:
         candidates: list[Candidate],
         reviews: list[Review],
     ) -> None:
-        confirmed = [row for row in candidates if str(row.verdict) == "CONFIRMED"]
-        conditional = [row for row in candidates if str(row.verdict) == "CONDITIONAL"]
-        unresolved = [row for row in candidates if str(row.verdict) == "UNRESOLVED"]
+        confirmed = [
+            row
+            for row in candidates
+            if str(row.disposition) == FindingDisposition.REPORTABLE
+        ]
+        conditional = [
+            row for row in candidates if str(row.disposition) == "DEFERRED"
+        ]
+        unresolved = [
+            row for row in candidates if str(row.disposition) == "UNRESOLVED"
+        ]
+        suppressed = [
+            row for row in candidates if str(row.disposition) == "SUPPRESSED"
+        ]
         lines = [
             "# VulnHunter Security Report",
             "",
@@ -225,6 +443,7 @@ class ArtifactStore:
             f"- Confirmed findings: **{len(confirmed)}**",
             f"- Conditional findings: **{len(conditional)}**",
             f"- Unresolved findings: **{len(unresolved)}**",
+            f"- Suppressed candidates: **{len(suppressed)}**",
             "",
         ]
         if len(manifest["models"]) == 1:
@@ -267,7 +486,7 @@ class ArtifactStore:
             [
                 "## Summary",
                 "",
-                "| ID | Severity | CWE | Title | Verdict |",
+                "| ID | Severity | CWE | Title | Disposition |",
                 "|---|---|---|---|---|",
             ]
         )
@@ -275,15 +494,25 @@ class ArtifactStore:
         for index, candidate in enumerate(reportable, 1):
             lines.append(
                 f"| VULN-{index:03d} | {candidate.severity} | {candidate.cwe} | "
-                f"{candidate.title} | {candidate.verdict} |"
+                f"{candidate.title} | {candidate.disposition} |"
             )
         if not reportable:
             lines.append("| — | — | — | No reportable findings | — |")
         lines.append("")
         for index, candidate in enumerate(reportable, 1):
             lines.extend(_finding_markdown(f"VULN-{index:03d}", candidate, reviews))
+        lines.extend(["## Suppressed Candidates", ""])
+        if not suppressed:
+            lines.append("- None.")
+        for candidate in suppressed:
+            counterevidence = "; ".join(candidate.contradicting_evidence) or (
+                "Independent validation found a blocking control or disproved "
+                "a required exploitability claim."
+            )
+            lines.append(f"- **{candidate.title}** — {counterevidence}")
         lines.extend(
             [
+                "",
                 "## Coverage",
                 "",
                 f"- Production files inventoried: {manifest['coverage'].get('files_total', 0)}",
@@ -291,6 +520,33 @@ class ArtifactStore:
                 f"{manifest['assignments']['total']}",
                 f"- Failed assignments: {manifest['assignments']['failed']}",
                 f"- Unresolved files: {len(manifest['coverage'].get('unresolved_files', []))}",
+                f"- Mandatory security surfaces: "
+                f"{manifest['security_surfaces'].get('mandatory', 0)}",
+                f"- Unclosed mandatory surfaces: "
+                f"{len(manifest['security_surfaces'].get('unresolved_mandatory', []))}",
+                "- Threat model: [`threat_model.md`](threat_model.md)",
+                "- Coverage ledger: [`coverage_ledger.jsonl`](coverage_ledger.jsonl)",
+                "",
+                "## Static Tools and Sandbox",
+                "",
+                f"- Native deterministic rules: "
+                f"{'enabled' if manifest['tooling'].get('native_rules') else 'disabled'}",
+                f"- Native seeds: {manifest['tooling'].get('native_seed_count', 0)}",
+                f"- Optional scanner mode: "
+                f"{manifest['tooling'].get('optional_mode', 'auto')}",
+                f"- Docker execution: "
+                f"{'enabled' if manifest['sandbox'].get('enabled') else 'disabled'}",
+                f"- Sandbox network: {manifest['sandbox'].get('network', 'none')}",
+                "",
+                "## Usage",
+                "",
+                f"- Provider requests: {manifest['usage'].get('requests', 0)}",
+                f"- Input tokens: {manifest['usage'].get('input_tokens', 0)}",
+                f"- Output tokens: {manifest['usage'].get('output_tokens', 0)}",
+                f"- Cached input tokens: "
+                f"{manifest['usage'].get('cached_input_tokens', 0)}",
+                f"- Observed cost: "
+                f"{_display_cost(manifest['usage'].get('cost_usd'))}",
                 "",
                 "## Model Provenance",
                 "",
@@ -313,7 +569,11 @@ class ArtifactStore:
         candidates: list[Candidate],
         usage: Usage,
     ) -> None:
-        confirmed = [row for row in candidates if str(row.verdict) == "CONFIRMED"]
+        confirmed = [
+            row
+            for row in candidates
+            if str(row.disposition) == FindingDisposition.REPORTABLE
+        ]
         findings: list[dict[str, Any]] = []
         for index, candidate in enumerate(confirmed, 1):
             vuln_id = f"VULN-{index:03d}"
@@ -383,9 +643,12 @@ def _finding_markdown(
         "",
         f"- **Severity:** {candidate.severity}",
         f"- **CWE:** {candidate.cwe}",
-        f"- **Status:** {candidate.verdict}",
+        f"- **Verdict:** {candidate.verdict}",
+        f"- **Disposition:** {candidate.disposition}",
         f"- **Location:** {_location(candidate.sink)}",
         f"- **Entry Point:** {_location(candidate.source)}",
+        f"- **Closest Control:** {_location(candidate.closest_control)} "
+        f"{candidate.closest_control.get('description', '')}",
         f"- **Root Cause:** {candidate.root_cause}",
         f"- **Exploit Impact:** {candidate.new_capability}",
         f"- **Proposed Fix:** {candidate.fix_strategy}",
@@ -397,6 +660,36 @@ def _finding_markdown(
         lines.append(
             f"- {row.get('file', '')}:{row.get('line', '')} — "
             f"{row.get('claim', row.get('description', ''))}"
+        )
+    lines.extend(["", "### Proof Gaps and Counterevidence", ""])
+    if not candidate.proof_gaps and not candidate.contradicting_evidence:
+        lines.append("- None recorded.")
+    for gap in candidate.proof_gaps:
+        lines.append(f"- Proof gap: {gap}")
+    for evidence in candidate.contradicting_evidence:
+        lines.append(f"- Counterevidence: {evidence}")
+    if candidate.validation:
+        lines.extend(
+            [
+                "",
+                "### Validation",
+                "",
+                f"- Method: {candidate.validation.get('method', 'static')}",
+                f"- Rationale: {candidate.validation.get('rationale', '')}",
+            ]
+        )
+    if candidate.attack_path:
+        lines.extend(
+            [
+                "",
+                "### Attack Path",
+                "",
+                f"- Attacker position: "
+                f"{candidate.attack_path.get('attacker_position', '')}",
+                f"- Boundary crossed: "
+                f"{candidate.attack_path.get('boundary_crossed', '')}",
+                f"- Blast radius: {candidate.attack_path.get('blast_radius', '')}",
+            ]
         )
     lines.extend(["", "### Independent Review", ""])
     if not matching:
@@ -416,6 +709,49 @@ def _location(value: dict[str, Any]) -> str:
     return f"{path}:{line}" if path and line else path
 
 
+def _candidate_instances(candidate: Candidate) -> list[dict[str, Any]]:
+    return candidate.affected_instances or [
+        point
+        for point in (candidate.source, candidate.sink)
+        if point.get("file") or point.get("path")
+    ]
+
+
 def _slug(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug[:60] or "finding"
+
+
+def _display_cost(value: Any) -> str:
+    if value is None:
+        return "not reported"
+    return f"${float(value):.4f}"
+
+
+def _phase_summary(assignments: list[Assignment]) -> dict[str, dict[str, Any]]:
+    phases: dict[str, dict[str, Any]] = {}
+    for assignment in assignments:
+        kind = str(assignment.kind)
+        row = phases.setdefault(
+            kind,
+            {
+                "total": 0,
+                "completed": 0,
+                "failed": 0,
+                "pending": 0,
+                "prompt_hashes": [],
+            },
+        )
+        row["total"] += 1
+        key = {
+            "COMPLETED": "completed",
+            "FAILED": "failed",
+            "PENDING": "pending",
+        }.get(assignment.status, "pending")
+        row[key] += 1
+        if (
+            assignment.prompt_hash
+            and assignment.prompt_hash not in row["prompt_hashes"]
+        ):
+            row["prompt_hashes"].append(assignment.prompt_hash)
+    return phases

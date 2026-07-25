@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VulnHunter threat model v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository_digest",
+    "product_surfaces",
+    "actors",
+    "external_entrypoints",
+    "privileged_workflows",
+    "assets",
+    "dependency_attackers",
+    "trust_boundaries",
+    "security_invariants",
+    "external_controls",
+    "proof_gaps",
+    "model_provenance"
+  ],
+  "properties": {
+    "schema_version": {"const": "2"},
+    "repository_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "product_surfaces": {"type": "array", "items": {"type": "string"}},
+    "actors": {"type": "array", "items": {"type": "string"}},
+    "external_entrypoints": {"type": "array", "items": {"type": "string"}},
+    "privileged_workflows": {"type": "array", "items": {"type": "string"}},
+    "assets": {"type": "array", "items": {"type": "string"}},
+    "dependency_attackers": {"type": "array", "items": {"type": "string"}},
+    "trust_boundaries": {"type": "array", "items": {"type": "string"}},
+    "security_invariants": {"type": "array", "items": {"type": "string"}},
+    "external_controls": {"type": "array", "items": {"type": "string"}},
+    "proof_gaps": {"type": "array", "items": {"type": "string"}},
+    "model_provenance": {"type": "array", "items": {"type": "object"}}
+  }
+}

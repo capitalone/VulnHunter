@@ -32,9 +32,18 @@ reimplement the scan phases in the host coding agent.
 
 6. Wait for the process to exit. Read `run_manifest.json` and `README.md` from
    the reported results directory.
-7. Treat `COMPLETE_CLEAN` as clean only when coverage is complete. Report
+7. Treat `run_manifest.json` schema version 2 as the authoritative contract.
+   Consult `threat_model.md`, `coverage_ledger.jsonl`, per-candidate validation,
+   and attack-path artifacts when explaining results.
+8. Treat `COMPLETE_CLEAN` as clean only when coverage is complete and
+   `security_surfaces.unresolved_mandatory` is empty. Report
    `COMPLETE_FINDINGS` and `COMPLETE_CONDITIONAL` distinctly. Never reinterpret
    `INCOMPLETE_LIMIT`, `INCOMPLETE_COVERAGE`, or `FAILED` as clean.
+
+Static/read-only analysis is the default. Do not add `--execute` unless the user
+explicitly authorizes target-code execution. When authorized, first run
+`vulnhunter sandbox doctor`; execution is Docker-only and must never be replaced
+with host execution. Network access requires a separate explicit user choice.
 
 Remote providers receive selected repository content. The CLI must display the
 exact roster and locality before dispatch. Never replace a local model with a

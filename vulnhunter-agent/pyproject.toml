@@ -31,7 +31,12 @@ where = ["."]
 include = ["agent*", "vulnhunter*"]
 
 [tool.setuptools.package-data]
-vulnhunter = ["schemas/*.json"]
+vulnhunter = [
+    "schemas/*.json",
+    "rules/*.yml",
+    "sandbox_image/Dockerfile",
+    "sandbox_image/runner.py",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "vulnhunter.__version__" }
