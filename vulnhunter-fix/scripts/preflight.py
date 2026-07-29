@@ -32,14 +32,14 @@ def check(name: str, passed: bool, detail: str = "", optional: bool = False):
     global CHECKS_PASSED, CHECKS_FAILED
     if passed:
         CHECKS_PASSED += 1
-        print(f"  [ok] {name}")
+        msg = f"  [ok] {name}"
     else:
         if not optional:
             CHECKS_FAILED += 1
         msg = f"  [WARN] {name}" if optional else f"  [FAIL] {name}"
-        if detail:
-            msg += f" — {detail}"
-        print(msg)
+    if detail:
+        msg += f" — {detail}"
+    print(msg)
 
 
 def parse_version(version_str: str) -> tuple:

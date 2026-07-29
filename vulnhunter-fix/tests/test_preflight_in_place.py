@@ -176,6 +176,43 @@ class TestProbeSkipping:
         assert "Filesystem:" in out
 
 
+class TestCheckDetailReporting:
+    """Regression guard: check() must not swallow `detail` on a passing
+    result. The disk-space/memory "cannot determine" fallbacks pass
+    passed=True with a detail explaining the check was skipped, not
+    that it actually succeeded — that detail must reach the operator.
+    """
+
+    def test_check_true_with_detail_prints_detail(self, capsys):
+        preflight.check("X", True, "cannot determine — skipping check")
+        out = capsys.readouterr().out
+        assert "[ok] X" in out
+        assert "cannot determine — skipping check" in out
+
+    def test_check_true_without_detail_omits_dash(self, capsys):
+        preflight.check("X", True)
+        out = capsys.readouterr().out
+        assert out == "  [ok] X\n"
+
+    def test_disk_space_fallback_reports_reason(self, monkeypatch, capsys):
+        def raise_oserror(path):
+            raise OSError("boom")
+        monkeypatch.setattr(preflight, "_free_disk_bytes", raise_oserror)
+        preflight.check_disk_space()
+        out = capsys.readouterr().out
+        assert "[ok]" in out
+        assert "cannot determine — skipping check" in out
+
+    def test_memory_fallback_reports_reason(self, monkeypatch, capsys):
+        def raise_oserror():
+            raise OSError("boom")
+        monkeypatch.setattr(preflight, "_total_memory_bytes", raise_oserror)
+        preflight.check_memory()
+        out = capsys.readouterr().out
+        assert "[ok]" in out
+        assert "cannot determine — will default to conservative settings" in out
+
+
 class TestNoNetworkProbesInMain:
     """Regression guard: main() must not invoke any network probes."""
 
