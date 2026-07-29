@@ -8,6 +8,7 @@ git probes.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -211,6 +212,35 @@ class TestCheckDetailReporting:
         out = capsys.readouterr().out
         assert "[ok]" in out
         assert "cannot determine — will default to conservative settings" in out
+
+
+@pytest.mark.skipif(os.name != "nt", reason="GetDiskFreeSpaceExW is Windows-only")
+class TestDiskSpaceQuotaAware:
+    """_free_disk_bytes must read lpFreeBytesAvailableToCaller (the 2nd
+    out-param, quota-aware) to match POSIX statvfs's f_bavail semantics —
+    not lpTotalNumberOfFreeBytes (the 4th out-param, quota-blind), which
+    would overreport how much space the caller can actually use.
+    """
+
+    def test_reads_free_to_caller_not_total_free(self, monkeypatch):
+        import ctypes
+
+        FREE_TO_CALLER = 111 * (1024 ** 3)
+        TOTAL_FREE = 999 * (1024 ** 3)
+
+        def fake_get_disk_free_space_ex_w(path, free_to_caller, total_bytes, total_free):
+            if free_to_caller:
+                free_to_caller._obj.value = FREE_TO_CALLER
+            if total_free:
+                total_free._obj.value = TOTAL_FREE
+            return 1
+
+        monkeypatch.setattr(
+            ctypes.windll.kernel32,
+            "GetDiskFreeSpaceExW",
+            fake_get_disk_free_space_ex_w,
+        )
+        assert preflight._free_disk_bytes(".") == FREE_TO_CALLER
 
 
 class TestNoNetworkProbesInMain:

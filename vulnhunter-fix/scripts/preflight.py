@@ -120,9 +120,15 @@ def _free_disk_bytes(path: str) -> int:
     if os.name == "nt":
         import ctypes
 
+        # lpFreeBytesAvailableToCaller (2nd out-param) is free space subject
+        # to any per-user quota — the Windows analog of statvfs's f_bavail
+        # ("free blocks available to non-superuser"). lpTotalNumberOfFreeBytes
+        # (4th out-param) is the volume's total free space regardless of
+        # quota, which has no POSIX-side equivalent here and would make this
+        # report more free space than the caller can actually use.
         free_bytes = ctypes.c_ulonglong(0)
         if not ctypes.windll.kernel32.GetDiskFreeSpaceExW(
-            ctypes.c_wchar_p(os.path.abspath(path)), None, None, ctypes.byref(free_bytes)
+            ctypes.c_wchar_p(os.path.abspath(path)), ctypes.byref(free_bytes), None, None
         ):
             raise OSError("GetDiskFreeSpaceExW failed")
         return free_bytes.value
@@ -437,7 +443,7 @@ def _print_bootstrap_hint():
     # under skill_dir — there is nothing there to run.
     if os.name == "nt":
         venv_python = os.path.join(skill_dir, ".venv", "Scripts", "python.exe")
-        run_install_hint = "    install.cmd"
+        run_install_hint = "    .\\install.cmd"
     else:
         venv_python = os.path.join(skill_dir, ".venv", "bin", "python3")
         run_install_hint = "    bash install.sh"
