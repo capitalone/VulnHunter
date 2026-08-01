@@ -9,6 +9,10 @@ Scan arbitrary GitHub repos using the shared VulnHunter scan engine.
 3. `python -m local_harness.batch.run status` (check progress)
 4. `python -m local_harness.batch.run collect` (gather results into `to_upload/`)
 
+Clone directories use `<owner>__<repo>` names so same-named repositories under
+different owners remain independent. Equivalent duplicate entries are scanned
+once.
+
 ## Options
 
 - `--re-clone` — remove and re-clone repos that already exist locally

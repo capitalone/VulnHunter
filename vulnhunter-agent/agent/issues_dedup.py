@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from . import _llm
-from .auth import OAuthTokenManager
+from .auth import TokenProvider
 from .config import AgentConfig
 from .issues_extract import Finding
 from .issues_fetch import OpenIssue
@@ -227,7 +227,7 @@ async def _semantic_pass(
     findings: list[Finding],
     open_issues: list[OpenIssue],
     config: AgentConfig,
-    token_manager: OAuthTokenManager,
+    token_manager: TokenProvider,
     *,
     cost_tracker: "_llm.CostStats | None" = None,
     audit_writer: "AuditWriter | None" = None,
@@ -340,7 +340,7 @@ async def dedup(
     findings: list[Finding],
     open_issues: list[OpenIssue],
     config: AgentConfig,
-    token_manager: OAuthTokenManager,
+    token_manager: TokenProvider,
     *,
     cost_tracker: "_llm.CostStats | None" = None,
     audit_writer: "AuditWriter | None" = None,

@@ -65,9 +65,13 @@ Settings load from a TOML file (`--config`, then `$VULNHUNT_AGENT_CONFIG`, then
 |-------------|----------------------|-------------|
 | `api_key` *(default)* | Direct Anthropic API | `[anthropic].api_key` or the standard `ANTHROPIC_API_KEY` env var |
 | `bedrock_oauth` | Routes through an AWS Bedrock proxy fronted by an OAuth2 client-credentials token endpoint | `[anthropic].bedrock_base_url` + the `[oauth]` block (`token_endpoint`, `client_id`, `client_secret`) |
+| `bedrock_sigv4` | Calls Amazon Bedrock directly with SigV4 request signing via the standard AWS credential chain — no proxy, no bearer token | `[anthropic].aws_region`; optionally `aws_profile` (named profile) and `bedrock_base_url` (VPC/custom endpoint). No `[oauth]` block. |
 
 `bedrock_oauth` exists for environments that front Claude with a Bedrock proxy and mint
-short-lived bearer tokens; most users want the default `api_key` mode.
+short-lived bearer tokens. `bedrock_sigv4` is for AWS-native setups that call Bedrock
+directly (use a cross-region inference-profile model ID, e.g. `us.anthropic.claude-...`);
+credentials resolve from the usual AWS chain — env vars, shared config/credentials file,
+SSO, or an instance/task role. Most users want the default `api_key` mode.
 
 ### Other sections (abridged)
 
@@ -90,6 +94,7 @@ CLI (python -m agent)
   └─ config.load_config()            TOML + VULNHUNT_* env  → AgentConfig
   └─ make_token_manager(config)      api_key → ApiKeyTokenManager
                                      bedrock_oauth → OAuthTokenManager
+                                     bedrock_sigv4 → SigV4TokenManager
   └─ runner.run_vulnhunt()
         └─ build_claude_settings()   env (auth + proxy + telemetry) + sandbox JSON
         └─ Claude Agent SDK          runs /vulnhunt, streams events, retries on 429
@@ -101,11 +106,14 @@ CLI (python -m agent)
 
 - **Auth is a single chokepoint.** `build_claude_settings` renders the Claude Code
   settings JSON (environment + sandbox) and is the only place that knows whether to set
-  `ANTHROPIC_API_KEY` (api_key mode) or the Bedrock env + `ANTHROPIC_AUTH_TOKEN`
-  (bedrock_oauth mode). Both the scan loop and the issues-LLM calls go through it.
-- **Token providers share one interface.** `ApiKeyTokenManager` and `OAuthTokenManager`
-  both expose `get_valid_token()`; `make_token_manager(config)` returns the right one, so
-  the rest of the code is auth-mode agnostic.
+  `ANTHROPIC_API_KEY` (api_key mode), the Bedrock env + `ANTHROPIC_AUTH_TOKEN`
+  (bedrock_oauth mode), or the Bedrock env *without* any token (bedrock_sigv4 mode —
+  omitting `CLAUDE_CODE_SKIP_BEDROCK_AUTH` / `ANTHROPIC_AUTH_TOKEN` is what makes the
+  bundled CLI sign requests itself). Both the scan loop and the issues-LLM calls go
+  through it.
+- **Token providers share one interface.** `ApiKeyTokenManager`, `OAuthTokenManager`,
+  and `SigV4TokenManager` all expose `get_valid_token()`; `make_token_manager(config)`
+  returns the right one, so the rest of the code is auth-mode agnostic.
 - **Contracts are schema-validated.** `scan_manifest.schema.json` (agent → scan-worker)
   and `verify_disposition.schema.json` (verify output) are validated before write.
 - **The `vulnhunter` package** is the thin CLI entry point around the `agent` package.
