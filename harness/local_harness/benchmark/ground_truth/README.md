@@ -3,12 +3,13 @@
 This directory holds the benchmark corpus: one JSON file per target repository,
 each containing an array of known findings the scanner is expected to detect.
 
-**You supply your own corpus.** This repo ships only `EXAMPLE.json` — a small,
-**synthetic** sample that documents the schema and points at public,
-deliberately-vulnerable applications (OWASP NodeGoat / Juice Shop / WebGoat).
-The commit hashes in `EXAMPLE.json` are **illustrative placeholders**; set them to
-the exact commit that contains the vulnerability in your own targets before
-running the benchmark. Add your own `<repo-name>.json` files here.
+This repo ships a real starter corpus covering OWASP Juice Shop, WebGoat, and
+NodeGoat (`juice-shop.json`, `WebGoat.json`, `NodeGoat.json`), each pinned to a
+specific commit hash with exact file and line references. These run out of the box.
+
+`EXAMPLE.json.template` documents the schema but uses placeholder commit hashes;
+it is excluded from the benchmark glob (only `*.json` files are loaded). Copy and
+rename it if you want a starting point for new entries.
 
 ## Schema
 
