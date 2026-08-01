@@ -46,6 +46,42 @@ from .tally import (
 from .finding_history import get_stable_findings, update_history
 
 
+_REQUIRED_FIELDS = {"finding_id", "type", "source_code", "description"}
+_SOURCE_URL_PREFIX = "https://github.com/"
+_SOURCE_URL_TREE = "/tree/"
+
+
+def _validate_benchmarks(benchmarks):
+    """Validate all loaded benchmark findings before any network I/O.
+
+    Returns a list of error strings. Empty list means all clear.
+    """
+    errors = []
+    seen_ids = {}
+    for filename, findings in benchmarks:
+        if not isinstance(findings, list):
+            errors.append(f"{filename}: top-level value must be a JSON array")
+            continue
+        for i, finding in enumerate(findings):
+            loc = f"{filename}[{i}]"
+            missing = _REQUIRED_FIELDS - set(finding.keys())
+            if missing:
+                errors.append(f"{loc}: missing required fields: {', '.join(sorted(missing))}")
+                continue
+            fid = finding["finding_id"]
+            if fid in seen_ids:
+                errors.append(f"{loc}: duplicate finding_id '{fid}' (also in {seen_ids[fid]})")
+            else:
+                seen_ids[fid] = filename
+            url = finding["source_code"]
+            if not url.startswith(_SOURCE_URL_PREFIX) or _SOURCE_URL_TREE not in url:
+                errors.append(
+                    f"{loc} ({fid}): source_code must be "
+                    f"https://github.com/{{org}}/{{repo}}/tree/{{commit_hash}}, got: {url!r}"
+                )
+    return errors
+
+
 def load_all_benchmarks():
     """Load all benchmark JSON files.
 
@@ -57,12 +93,22 @@ def load_all_benchmarks():
     for json_file in sorted(glob.glob(pattern)):
         with open(json_file) as f:
             findings = json.load(f)
+        results.append((os.path.basename(json_file), findings))
+
+    errors = _validate_benchmarks(results)
+    if errors:
+        print("Error: benchmark corpus validation failed:")
+        for err in errors:
+            print(f"  {err}")
+        sys.exit(1)
+
+    for _, findings in results:
         for finding in findings:
             repo_url, repo_name, commit_hash = parse_source_url(finding["source_code"])
             finding["_repo_url"] = repo_url
             finding["_repo_name"] = repo_name
             finding["_commit_hash"] = commit_hash
-        results.append((os.path.basename(json_file), findings))
+
     return results
 
 
