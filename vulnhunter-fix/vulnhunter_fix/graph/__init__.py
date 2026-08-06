@@ -13,12 +13,14 @@ from __future__ import annotations
 
 from .build import build_or_load, build_graph
 from .query import GraphQuery, load_graph
+from .protocol import GraphBackend
 from .config import GRAPHIFY_VERSION_RANGE
 
 __all__ = [
     "build_or_load",
     "build_graph",
     "GraphQuery",
+    "GraphBackend",
     "load_graph",
     "GRAPHIFY_VERSION_RANGE",
 ]
