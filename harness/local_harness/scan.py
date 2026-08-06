@@ -207,7 +207,7 @@ def scan_folder(folder_path, log_file=None, readonly=False):
         ["claude", "-p", prompt,
          "--output-format", "stream-json",
          "--verbose",
-         "--allowedTools", "Read", "Write", "Edit", "Bash", "Agent",
+         "--allowedTools", "Read", "Write", "Edit", "Bash", "Agent", "LSP",
          "--permission-mode", "acceptEdits",
          "--model", MODEL,
          "--add-dir", folder_path,
