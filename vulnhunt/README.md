@@ -64,13 +64,16 @@ methodology instead of improvised analysis.
 `phase2_shared.md` holds the reference material every class agent reads first, so
 it is cached across the parallel dispatch.
 
-## Requirements
+## Language Server Protocol (LSP) Support
 
-- The [Claude Code CLI](https://docs.claude.com/en/docs/claude-code),
-  authenticated, running on an Opus model.
-- No Python, no network — the skill is read-only over the target checkout by
-  default. (The agent runtime can opt into `--no-read-only --enable-bash` to run
-  exploit tests; interactive use stays static.)
+When an LSP plugin is enabled in Claude Code, `/vulnhunt` Phase 2 trace agents automatically prefer the native `LSP` tool (`prepareCallHierarchy` + `incomingCalls`) to trace caller reachability and second-order readers, cross-checked unconditionally with Grep (`lsp+grep`).
+
+To enable LSP plugins in Claude Code:
+```bash
+claude plugin install pyright-lsp     # Python
+# claude plugin install typescript-lsp # TypeScript
+```
+If an LSP plugin or language server is absent, `/vulnhunt` gracefully uses standard `Grep` without error.
 
 ## License
 
