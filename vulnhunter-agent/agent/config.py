@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+
+from agent.engines import ENGINE_NAMES
 
 
 @dataclass(frozen=True)
@@ -117,6 +119,21 @@ class ScanConfig:
     # the bundled CLI bypasses any inherited HTTP proxy for these hosts/CIDRs.
     # Default covers loopback + private ranges; add your own internal zones.
     no_proxy: str = "localhost,127.0.0.1,169.254.169.254,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    # Which agent harness drives the scan. "claude-code" is the existing
+    # Claude Agent SDK path (unchanged); "hermes"/"copilot" shell out to the
+    # respective CLI with the same results-directory contract. See
+    # agent/engines/.
+    engine: str = "claude-code"
+    # Override for the engine binary path (default: $PATH lookup).
+    engine_command: str = ""
+    # Hermes model-routing provider (hermes engine only; empty = hermes
+    # config default), e.g. "anthropic", "openai-codex", "openrouter".
+    engine_provider: str = ""
+    # Hard cap for one engine-driven scan, seconds (CLI engines only).
+    engine_timeout_seconds: int = 21_600
+    # Extra CLI flags appended to the engine invocation (e.g. Copilot
+    # ``--allow-tool`` patterns). Split on commas for readability.
+    engine_extra_args: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -604,7 +621,31 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
                 "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
             )
         ),
+        engine=str(
+            _resolve(scan_raw, "scan", "engine", default="claude-code")
+        ),
+        engine_command=str(
+            _resolve(scan_raw, "scan", "engine_command", default="")
+        ),
+        engine_provider=str(
+            _resolve(scan_raw, "scan", "engine_provider", default="")
+        ),
+        engine_timeout_seconds=int(
+            _resolve(
+                scan_raw, "scan", "engine_timeout_seconds", kind=int, default=21_600
+            )
+        ),
+        engine_extra_args=str(
+            _resolve(scan_raw, "scan", "engine_extra_args", default="")
+        ).split(","),
     )
+    if scan.engine not in ENGINE_NAMES:
+        raise ValueError(
+            f"[scan] engine must be one of {', '.join(ENGINE_NAMES)}; "
+            f"got {scan.engine!r}"
+        )
+    extra_args = [a.strip() for a in scan.engine_extra_args if a.strip()]
+    scan = replace(scan, engine_extra_args=extra_args)
 
     github = GitHubConfig(
         host=str(_resolve(github_raw, "github", "host", default="github.com")),

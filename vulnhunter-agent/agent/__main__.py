@@ -72,6 +72,7 @@ from .runner import (
     run_vulnhunt,
     set_verbosity,
 )
+from .engines import ScanSpec, get_engine
 from ._stream_events import SessionTotals
 from .issues import PostSummary
 from .issues_extract import Finding
@@ -907,16 +908,37 @@ async def _run_scan_flow(
                 github_token=get_github_token("scan", config),
                 github_host=config.github.host,
             )
-            results_dir = await run_vulnhunt(
-                clone_dir,
-                config,
-                model_override=args.model,
-                scan_id=args.scan_id,
-                read_only=effective_read_only,
-                enable_bash=args.enable_bash,
-                audit_writer=audit_writer,
-                totals_out=scan_totals,
-            )
+            # Engine routing: the default claude-code path calls the
+            # module-level run_vulnhunt directly so existing monkeypatch
+            # seams (tests patch agent.__main__.run_vulnhunt) keep working
+            # and behavior stays byte-identical. Other engines go through
+            # the ScanEngine protocol (agent/engines/).
+            engine = get_engine(config)
+            if engine.name == "claude-code":
+                results_dir = await run_vulnhunt(
+                    clone_dir,
+                    config,
+                    model_override=args.model,
+                    scan_id=args.scan_id,
+                    read_only=effective_read_only,
+                    enable_bash=args.enable_bash,
+                    audit_writer=audit_writer,
+                    totals_out=scan_totals,
+                )
+            else:
+                spec = ScanSpec(
+                    clone_dir=clone_dir,
+                    config=config,
+                    model=args.model or config.anthropic.model,
+                    scan_id=args.scan_id,
+                    read_only=effective_read_only,
+                    enable_bash=args.enable_bash,
+                )
+                results_dir = await engine.run_scan(
+                    spec,
+                    audit_writer=audit_writer,
+                    totals_out=scan_totals,
+                )
             print()
             print(f"Clone:    {clone_dir}")
             if results_dir is None:
