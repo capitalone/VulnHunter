@@ -9,7 +9,46 @@ if [ -z "${HOME:-}" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILLS_PARENT="$HOME/.claude/skills"
+
+# Target harness. claude-code installs the repo-root skill sources verbatim
+# (identity); other targets are rendered by scripts/render_skills.py from
+# adapters/<target>/adapter.json into dist/<target>/ first.
+TARGET="claude-code"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --target) TARGET="${2:-}"; shift 2 ;;
+        --target=*) TARGET="${1#*=}"; shift ;;
+        -h|--help)
+            echo "usage: ./install.sh [--target claude-code|hermes|copilot|codex]"
+            exit 0 ;;
+        *)
+            echo "error: unknown argument: $1" >&2
+            exit 1 ;;
+    esac
+done
+
+case "$TARGET" in
+    claude-code)
+        SKILLS_PARENT="$HOME/.claude/skills" ;;
+    hermes)
+        SKILLS_PARENT="$HOME/.hermes/skills"
+        echo "Rendering hermes skill bundle (dist/hermes)..."
+        python3 "$SCRIPT_DIR/scripts/render_skills.py" --adapter hermes \
+            || { echo "error: render_skills.py failed" >&2; exit 1; } ;;
+    copilot)
+        SKILLS_PARENT="$HOME/.copilot/skills"
+        echo "Rendering copilot skill bundle (dist/copilot)..."
+        python3 "$SCRIPT_DIR/scripts/render_skills.py" --adapter copilot \
+            || { echo "error: render_skills.py failed" >&2; exit 1; } ;;
+    codex)
+        SKILLS_PARENT="$HOME/.codex/skills"
+        echo "Rendering codex skill bundle (dist/codex)..."
+        python3 "$SCRIPT_DIR/scripts/render_skills.py" --adapter codex \
+            || { echo "error: render_skills.py failed" >&2; exit 1; } ;;
+    *)
+        echo "error: unknown target '$TARGET' (supported: claude-code, hermes, copilot, codex)" >&2
+        exit 1 ;;
+esac
 
 # vulnhunter-fix runtime deps. The skill's scripts/_skill_bootstrap.py expects
 # a bundled venv at <skill>/.venv containing these; without it preflight's
@@ -76,12 +115,28 @@ import jsonschema, graphify  # noqa: F401
 }
 
 # Skills shipped from this repo. Format: <installed-name>:<source-dir>.
-# Order matters only for output readability — both are independent.
-SKILLS=(
-    "vulnhunt:$SCRIPT_DIR/vulnhunt"
-    "vulnhunt-fix-verify:$SCRIPT_DIR/vulnhunt-fix-verify"
-    "vulnhunter-fix:$SCRIPT_DIR/vulnhunter-fix"
-)
+# claude-code installs the repo-root sources (identity with dist/claude-code,
+# enforced by tests/test_render_skills.py); rendered targets install from
+# dist/<target>/ and pick up every skill the adapter declares.
+if [ "$TARGET" = "claude-code" ]; then
+    SKILLS=(
+        "vulnhunt:$SCRIPT_DIR/vulnhunt"
+        "vulnhunt-fix-verify:$SCRIPT_DIR/vulnhunt-fix-verify"
+        "vulnhunter-fix:$SCRIPT_DIR/vulnhunter-fix"
+    )
+else
+    DIST_DIR="$SCRIPT_DIR/dist/$TARGET"
+    SKILLS=()
+    for d in "$DIST_DIR"/*/; do
+        [ -f "$d/SKILL.md" ] || continue
+        name="$(basename "$d")"
+        SKILLS+=("$name:$d")
+    done
+    if [ ${#SKILLS[@]} -eq 0 ]; then
+        echo "error: no skills found under $DIST_DIR" >&2
+        exit 1
+    fi
+fi
 
 # Create the parent skills directory if missing.
 if [ ! -d "$SKILLS_PARENT" ]; then
@@ -138,7 +193,8 @@ done
 
 echo ""
 if [ "$installed_any" -eq 1 ]; then
-    echo "To update after pulling changes: re-run ./install.sh"
+    echo "Installed for target: $TARGET"
+    echo "To update after pulling changes: re-run ./install.sh --target $TARGET"
     echo "To uninstall: $SCRIPT_DIR/uninstall.sh"
 else
     echo "No skills were installed."

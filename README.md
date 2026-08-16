@@ -100,6 +100,24 @@ REM .\uninstall.cmd
 > [!NOTE]
 > `install.sh`/`install.cmd` copy files directly (rather than symlinking) because symlinks can break `find`/`glob` functionality inside subagents. Re-run the install script after pulling updates to refresh your local environment.
 
+### Other agent harnesses (experimental)
+
+The scanner skill can also be rendered for other agent CLIs — Hermes, GitHub
+Copilot CLI, and Codex — with the Claude Code path unchanged:
+
+```bash
+./install.sh --target hermes    # ~/.hermes/skills/vulnhunt
+./install.sh --target copilot   # ~/.copilot/skills/vulnhunt
+./install.sh --target codex     # ~/.codex/skills/vulnhunt
+```
+
+See [docs/ENGINES.md](docs/ENGINES.md) for headless usage, engine selection
+in the runtime agent and benchmark harness, per-harness status, and
+[docs/ADAPTER_GUIDE.md](docs/ADAPTER_GUIDE.md) to add another harness.
+Non-Claude adapters are experimental until benchmarked against the
+ground-truth corpus — VulnHunter's gates are calibrated for Opus-class
+reasoning models.
+
 ---
 
 ## Usage Guide
