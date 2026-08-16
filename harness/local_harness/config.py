@@ -34,6 +34,43 @@ JUDGE_RETRY_MAX_BACKOFF = 180
 SKILLS_DIR = os.path.expanduser("~/.claude/skills/vulnhunt")
 PHASES_DIR = os.path.join(SKILLS_DIR, "phases")
 
+# --- Scan/judge engine selection -----------------------------------------
+# Which agent harness drives scans (and, separately, the judge). The skills
+# must be installed for that harness (./install.sh --target <engine> from the
+# repo root). Override via VULNHUNT_HARNESS_ENGINE / VULNHUNT_HARNESS_JUDGE_ENGINE.
+# Judging with a DIFFERENT engine than the scanner avoids self-preference
+# bias — e.g. scan with hermes, judge with claude-code.
+ENGINE = os.environ.get("VULNHUNT_HARNESS_ENGINE", "claude-code")
+JUDGE_ENGINE = os.environ.get("VULNHUNT_HARNESS_JUDGE_ENGINE", ENGINE)
+
+ENGINES = {
+    "claude-code": {
+        "binary": "claude",
+        "skills_dir": "~/.claude/skills/vulnhunt",
+    },
+    "hermes": {
+        "binary": "hermes",
+        "skills_dir": "~/.hermes/skills/vulnhunt",
+    },
+    "copilot": {
+        "binary": "copilot",
+        "skills_dir": "~/.copilot/skills/vulnhunt",
+    },
+    "codex": {
+        "binary": "codex",
+        "skills_dir": "~/.codex/skills/vulnhunt",
+    },
+}
+
+for _name in (ENGINE, JUDGE_ENGINE):
+    if _name not in ENGINES:
+        raise ValueError(
+            f"unknown harness engine {_name!r} (supported: {', '.join(sorted(ENGINES))})"
+        )
+
+# Engine-aware skills location (same value as SKILLS_DIR for claude-code).
+ENGINE_SKILLS_DIR = os.path.expanduser(ENGINES[ENGINE]["skills_dir"])
+
 # --- Batch scanning (ad-hoc URL list) ---
 BATCH_CLONE_BASE_DIR = os.path.join(REPO_ROOT, "repos_being_scanned")
 BATCH_REPO_LIST_FILE = os.path.join(HARNESS_DIR, "batch", "REPO_LIST.txt")

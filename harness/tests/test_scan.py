@@ -319,7 +319,7 @@ def test_scan_folder_timeout_with_valid_results_not_discarded(monkeypatch, tmp_p
 def test_scan_folder_with_retry_success_first_try(monkeypatch, tmp_path):
     folder = str(tmp_path / "repo")
     monkeypatch.setattr(scan, "scan_folder",
-                        lambda fp, log_file=None, readonly=False: scan.ScanResult(fp, "repo", 0, 3, 1.0, "rd", {"total_cost_usd": 1}))
+                        lambda fp, log_file=None, readonly=False, engine=None: scan.ScanResult(fp, "repo", 0, 3, 1.0, "rd", {"total_cost_usd": 1}))
     monkeypatch.setattr(scan, "is_rate_limit_failure", lambda p: False)
     result = scan.scan_folder_with_retry(folder)
     assert result.returncode == 0
@@ -329,7 +329,7 @@ def test_scan_folder_with_retry_429_then_success(monkeypatch, tmp_path):
     folder = str(tmp_path / "repo")
     calls = {"n": 0}
 
-    def fake_scan(fp, log_file=None, readonly=False):
+    def fake_scan(fp, log_file=None, readonly=False, engine=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return scan.ScanResult(fp, "repo", 1, 0, 0.5, None, {})
@@ -348,7 +348,7 @@ def test_scan_folder_with_retry_429_then_success(monkeypatch, tmp_path):
 def test_scan_folder_with_retry_429_exhausted(monkeypatch, tmp_path):
     folder = str(tmp_path / "repo")
     monkeypatch.setattr(scan, "scan_folder",
-                        lambda fp, log_file=None, readonly=False: scan.ScanResult(fp, "repo", 1, 0, 0.5, None, {}))
+                        lambda fp, log_file=None, readonly=False, engine=None: scan.ScanResult(fp, "repo", 1, 0, 0.5, None, {}))
     monkeypatch.setattr(scan, "is_rate_limit_failure", lambda p: True)
     monkeypatch.setattr(scan, "clean_prior_results", lambda *a, **k: ["r"])
     monkeypatch.setattr(scan.time, "sleep", lambda s: None)

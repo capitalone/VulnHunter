@@ -11,6 +11,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from .config import (
+    ENGINE,
+    ENGINE_SKILLS_DIR,
     MAX_SCAN_WORKERS,
     MODEL,
     PHASES_DIR,
@@ -174,19 +176,72 @@ def extract_cost_from_log(log_file_path):
     return {}
 
 
-def scan_folder(folder_path, log_file=None, readonly=False):
+def build_scan_command(folder_path, prompt, engine=None, readonly=False):
+    """Build the scan subprocess argv for one engine.
+
+    claude-code replicates the historical argv exactly (tests snapshot it).
+    Other engines drive the same installed skill through their headless
+    contract; success is still judged by the *_VULNHUNT_RESULTS_* dir.
+    """
+    engine = engine or ENGINE
+    if engine == "claude-code":
+        return [
+            "claude", "-p", prompt,
+            "--output-format", "stream-json",
+            "--verbose",
+            "--allowedTools", "Read", "Write", "Edit", "Bash", "Agent",
+            "--permission-mode", "acceptEdits",
+            "--model", MODEL,
+            "--add-dir", folder_path,
+            "--add-dir", os.path.dirname(folder_path),
+            "--add-dir", SKILLS_DIR,
+            "--add-dir", PHASES_DIR,
+        ]
+    if engine == "hermes":
+        # terminal (shell) only when the run isn't read-only, mirroring the
+        # Bash policy of the claude-code path.
+        toolsets = "file,delegation" if readonly else "file,terminal,delegation"
+        return [
+            "hermes", "chat", "-Q",
+            "-s", "vulnhunt",
+            "-t", toolsets,
+            "-m", MODEL,
+            "-q", prompt,
+        ]
+    if engine == "copilot":
+        # Experimental: verify the flag surface with `copilot -h` /
+        # `copilot help permissions` before benchmarking.
+        return ["copilot", "-p", prompt]
+    if engine == "codex":
+        # workspace-write even for read-only scans: the skill must write its
+        # results dir; read-only is enforced by the prompt, mirroring the
+        # claude-code acceptEdits policy. Flags verified on codex-cli 0.147.0.
+        return [
+            "codex", "exec",
+            "-C", folder_path,
+            "-s", "workspace-write",
+            "-m", MODEL,
+            prompt,
+        ]
+    raise ValueError(f"unknown engine {engine!r}")
+
+
+def scan_folder(folder_path, log_file=None, readonly=False, engine=None):
     """Run vulnhunt on one folder, stream events to a log file.
 
     Returns a ScanResult (folder_path, label, returncode, event_count,
     elapsed, results_dir, cost_data).
     """
+    engine = engine or ENGINE
     label = os.path.basename(folder_path)
 
     if log_file is None:
         log_file = os.path.join(folder_path, "benchmark_scan.log")
 
-    if not os.path.isdir(SKILLS_DIR):
-        print(f"  [{ts()}] [{label}] Error: Skill not installed. Run install.sh first.")
+    skills_dir = ENGINE_SKILLS_DIR if engine != "claude-code" else SKILLS_DIR
+    if not os.path.isdir(skills_dir):
+        print(f"  [{ts()}] [{label}] Error: Skill not installed for engine "
+              f"'{engine}'. Run install.sh --target {engine} first.")
         return ScanResult(folder_path, label, 1, 0, 0, None, {})
 
     prompt = (
@@ -204,16 +259,7 @@ def scan_folder(folder_path, log_file=None, readonly=False):
     start = time.time()
 
     proc = subprocess.Popen(
-        ["claude", "-p", prompt,
-         "--output-format", "stream-json",
-         "--verbose",
-         "--allowedTools", "Read", "Write", "Edit", "Bash", "Agent",
-         "--permission-mode", "acceptEdits",
-         "--model", MODEL,
-         "--add-dir", folder_path,
-         "--add-dir", os.path.dirname(folder_path),
-         "--add-dir", SKILLS_DIR,
-         "--add-dir", PHASES_DIR],
+        build_scan_command(folder_path, prompt, engine=engine, readonly=readonly),
         stdout=subprocess.PIPE,
         # Merge stderr into stdout (which we drain below) rather than piping it
         # to its own buffer no one reads — an unread stderr pipe deadlocks the
@@ -280,7 +326,7 @@ def scan_folder(folder_path, log_file=None, readonly=False):
     return ScanResult(folder_path, label, proc.returncode, event_count, elapsed, results_dir, cost_data)
 
 
-def scan_folder_with_retry(folder_path, log_filename=None, readonly=False):
+def scan_folder_with_retry(folder_path, log_filename=None, readonly=False, engine=None):
     """Wrap scan_folder with retry on 429 rate limit failures.
 
     Returns: Same ScanResult as scan_folder, with elapsed summed across attempts.
@@ -301,7 +347,7 @@ def scan_folder_with_retry(folder_path, log_filename=None, readonly=False):
             if removed:
                 print(f"  [{ts()}] [{label}] Cleaned {len(removed)} partial result(s)", flush=True)
 
-        result = scan_folder(folder_path, log_file=log_file, readonly=readonly)
+        result = scan_folder(folder_path, log_file=log_file, readonly=readonly, engine=engine)
         total_elapsed += result.elapsed
 
         actual_log = os.path.join(folder_path, log_filename or "benchmark_scan.log")
@@ -317,7 +363,7 @@ def scan_folder_with_retry(folder_path, log_filename=None, readonly=False):
         return result._replace(elapsed=total_elapsed)
 
 
-def scan_targets(targets, max_workers=None, status_interval=300, log_filename=None, readonly=False):
+def scan_targets(targets, max_workers=None, status_interval=300, log_filename=None, readonly=False, engine=None):
     """Scan a list of benchmark targets in parallel with 429 retry.
 
     targets: list of dicts with at least 'clone_dir' and 'key' fields.
@@ -329,7 +375,7 @@ def scan_targets(targets, max_workers=None, status_interval=300, log_filename=No
         max_workers = MAX_SCAN_WORKERS
 
     print(f"\n[{ts()}] Starting scans for {len(targets)} targets "
-          f"(max {max_workers} parallel)", flush=True)
+          f"(engine {engine or ENGINE}, max {max_workers} parallel)", flush=True)
 
     results = []
     completed_keys = set()
@@ -338,7 +384,7 @@ def scan_targets(targets, max_workers=None, status_interval=300, log_filename=No
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_target = {
-            executor.submit(scan_folder_with_retry, t["clone_dir"], log_filename=log_filename, readonly=readonly): t
+            executor.submit(scan_folder_with_retry, t["clone_dir"], log_filename=log_filename, readonly=readonly, engine=engine): t
             for t in targets
         }
         for future in as_completed(future_to_target):

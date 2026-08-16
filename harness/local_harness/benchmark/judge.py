@@ -6,6 +6,7 @@ import subprocess
 import time
 
 from local_harness.config import (
+    JUDGE_ENGINE,
     JUDGE_MAX_RETRIES,
     JUDGE_RETRY_BACKOFF_MULTIPLIER,
     JUDGE_RETRY_INITIAL_BACKOFF,
@@ -53,13 +54,48 @@ def read_results_report(results_dir):
         return f.read()
 
 
-def judge_findings_batch(results_report, findings, model=None):
+def build_judge_command(prompt, system_prompt, model, engine=None):
+    """Build the judge subprocess argv for one engine.
+
+    claude-code replicates the historical argv exactly. Engines without a
+    --system-prompt flag carry the system prompt inside the prompt text.
+    """
+    engine = engine or JUDGE_ENGINE
+    if engine == "claude-code":
+        return [
+            "claude", "-p", prompt,
+            "--output-format", "text",
+            "--model", model,
+            "--system-prompt", system_prompt,
+        ]
+    if engine == "hermes":
+        return [
+            "hermes", "chat", "-Q",
+            "-m", model,
+            "-q", f"{system_prompt}\n\n---\n\n{prompt}",
+        ]
+    if engine == "copilot":
+        return ["copilot", "-p", f"{system_prompt}\n\n---\n\n{prompt}"]
+    if engine == "codex":
+        # Judge may run outside a git repo — skip the repo check.
+        return [
+            "codex", "exec",
+            "--skip-git-repo-check",
+            "-m", model,
+            f"{system_prompt}\n\n---\n\n{prompt}",
+        ]
+    raise ValueError(f"unknown engine {engine!r}")
+
+
+def judge_findings_batch(results_report, findings, model=None, engine=None):
     """Judge multiple benchmark findings against one scan result in a single LLM call.
 
     Args:
         results_report: Content of the scanner's README.md
         findings: List of benchmark finding dicts (finding_id, type, description)
         model: Model to use (defaults to config.MODEL)
+        engine: Judge engine (defaults to config.JUDGE_ENGINE — may differ
+            from the scan engine to avoid self-preference bias)
 
     Returns: List of judgment dicts, one per finding.
     """
@@ -90,10 +126,7 @@ For EACH benchmark finding above, determine if the scanner detected it. Respond 
     for attempt in range(JUDGE_MAX_RETRIES + 1):
         try:
             result = subprocess.run(
-                ["claude", "-p", prompt,
-                 "--output-format", "text",
-                 "--model", model,
-                 "--system-prompt", JUDGE_SYSTEM_PROMPT],
+                build_judge_command(prompt, JUDGE_SYSTEM_PROMPT, model, engine=engine),
                 capture_output=True, text=True, timeout=JUDGE_TIMEOUT,
             )
         except subprocess.TimeoutExpired:
