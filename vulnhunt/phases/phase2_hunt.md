@@ -156,12 +156,12 @@ Perform these audits:
    if yes, the wildcard branch is over-permissioned, (c) check if the wildcard
    includes destructive operations beyond what the feature requires.
 
-2. CREDENTIAL-ISSUING SINK AUDIT: Grep for all credential-issuing functions
+2. CREDENTIAL-ISSUING SINK AUDIT: Grep for all credential-issuing function definitions
    (STS AssumeRole, token minting, key generation, credential vending).
-   For EACH caller of the credential-issuing function, verify it branches on
-   request type / access level before issuing credentials. If ANY caller does
-   not branch, a policy-only or read-only request could reach the credential
-   path — that is a CANDIDATE.
+   For EACH caller of the credential-issuing function (using LSP `prepareCallHierarchy`/`incomingCalls`
+   when available + Grep cross-check), verify it branches on request type / access level
+   before issuing credentials. If ANY caller does not branch, a policy-only or read-only
+   request could reach the credential path — that is a CANDIDATE.
 
 3. CRYPTOGRAPHIC SINK AUDIT: Grep for crypto API calls (adapt to detected stack).
    For EACH call in production code, check:
@@ -185,7 +185,7 @@ Perform these audits:
    Java: `ExecutorService.submit`, `CompletableFuture.runAsync`, `@Async`
    Go: `go func()` goroutine launches
    Node.js: fire-and-forget promises (no `await`), `setImmediate`
-   For EACH async dispatch in production code:
+   For EACH async dispatch in production code (enumerating callers via LSP when available + Grep cross-check):
    (a) What state does the async op modify (delete, create, update)?
    (b) Does any subsequent synchronous operation depend on that state change?
    (c) Is there locking/transaction/sync ensuring completion before the
@@ -194,9 +194,9 @@ Perform these audits:
 6. RATE-LIMIT / ATTEMPT-COUNTER AUDIT: Grep for session-attribute writes tracking
    attempt counts (`session.setAttribute`, `session.set`, `req.session.`, `HttpSession`
    combined with `attempt`, `count`, `limit`, `tries`, `lockout`, `max`). For EACH
-   counter on an unauthenticated endpoint: verify the binding identifier cannot be
-   rotated to reset it. If rotatable (HTTP session without prior auth, ephemeral
-   cookie) → CANDIDATE (CWE-307).
+   counter on an unauthenticated endpoint (enumerating callers via LSP when available + Grep cross-check):
+   verify the binding identifier cannot be rotated to reset it. If rotatable (HTTP session
+   without prior auth, ephemeral cookie) → CANDIDATE (CWE-307).
 
 For each finding, return the candidate format used by trace agents (but do
 NOT assign VULN-NNN IDs). Include gate results where applicable.

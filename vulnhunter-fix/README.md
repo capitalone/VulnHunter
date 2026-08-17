@@ -110,6 +110,26 @@ them to your own org names before running fork mode:
 
 Override the GitHub host at runtime via `VULNFIX_GH_HOST` / `GH_HOST`.
 
+### Language Server Protocol (LSP) Configuration
+
+To enable semantic type-aware code graph analysis (resolving call hierarchy, eliminating regex comment noise, and raising graph confidence to `high` without cloud LLM keys):
+
+1. Install host language servers:
+   ```bash
+   npm install -g pyright # Python
+   # go install golang.org/x/tools/gopls@latest # Go
+   ```
+2. Set `VULNFIX_GRAPH_BACKEND` at runtime:
+   ```bash
+   VULNFIX_GRAPH_BACKEND=lsp python scripts/build_graph.py --repo-root <path> --work-dir <path> --findings <path>
+   ```
+
+Available `VULNFIX_GRAPH_BACKEND` options:
+- `auto` *(default)*: Uses AST (`graphifyy`) when uninhibited, falls back to `grep`.
+- `lsp`: Uses local stdio LSP servers (`pyright`, `gopls`) for high-confidence semantic resolution.
+- `ast`: Forces `graphifyy` AST extraction.
+- `grep`: Forces regex Grep text extraction (`confidence: low`).
+
 ## Tests
 
 ```bash

@@ -12,10 +12,16 @@ These instructions apply to ALL class-group trace agents (INJ, NAV, LOG). Read y
    - (b) is proven sanitized or type-constrained before every sink → **safe**
    - (c) exits the codebase (returned to caller, logged, discarded) → **safe**
    - (d) reaches a store (DB, cache, queue, in-memory state, session/global
-     variable) → grep for ALL readers and trace EACH forward independently
+     variable) → enumerate all readers and trace EACH forward independently
      (second-order flow). Do NOT record NO-MATCH at a store boundary. You must
      exhaust every consumer before concluding SAFE — one consumer being safe does
      NOT clear others.
+     *Method:* If the store is a language-level symbol (class field, variable, named
+     constant) and your available tools include `LSP` (or a language-server tool),
+     use `LSP` (`findReferences`/`incomingCalls`) as the primary method, with **Grep**
+     as a required cross-check (union the results). If the store is an external system
+     addressed by a string literal (Redis key, SQL column name, queue string), use
+     **Grep** only.
      **Boolean-gate trap:** A presence check (`if (param) { ... }`) is NOT a
      disposition — the VALUE is often extracted and stored in the same block.
      Trace the stored value, not just the branch.
@@ -148,13 +154,17 @@ Your class-specific file may contain additional Gate 0 exemptions for your
 vulnerability class. Apply those after this generic Gate 0 evaluation.
 
 **Gate 1: Is the code reachable?**
-Use the **Grep tool** to search for all call sites of the suspect symbol across
-the codebase. Use the `glob` parameter to restrict to production source file
-extensions and exclude test directories.
+Enumerate all call sites of the suspect symbol across the codebase.
+- **Method:** If your available tools include `LSP` (or a language-server tool), use
+  `LSP` (`prepareCallHierarchy` + `incomingCalls`) as the primary caller-enumeration
+  method. **ALWAYS** also run the **Grep** tool call (restricted via `glob` to production
+  source extensions, excluding test dirs). Union the results from both tools (`lsp+grep`);
+  never intersect. If `LSP` is absent, use **Grep** as primary (`grep-only`).
+- Record the method used in candidate output (`method: lsp+grep | grep-only`).
 
 Exclude test files from the results. If 0 production usages are found, this is dead
 code. Record as "dead code, not a vulnerability" and move on. Do not trace data flows,
-construct PoCs, or propose fixes for dead code. This check is one tool call — never skip it.
+construct PoCs, or propose fixes for dead code. This check is mandatory — never skip it.
 
 **CRITICAL: Exhaust ALL callers — this applies to Gate 1 too, not just later gates.**
 If a symbol has N call sites, check EVERY one for production reachability. A function
@@ -200,8 +210,8 @@ equal or higher privileges than the attack — if so, not a privilege escalation
 Now that you know the input is attacker-controlled, check whether it is
 neutralized before reaching the sink:
 
-**Exhaust ALL callers for sanitization too.** If a sink has N call sites and the
-first one sanitizes input, you MUST check the other N-1. A safe caller does NOT
+**Exhaust ALL callers for sanitization too.** If a sink has N call sites (reusing Gate 1's
+call-site set), you MUST check the other N-1. A safe caller does NOT
 clear the finding — only proving ALL callers sanitize clears it. Each unsanitized
 caller is a separate finding.
 
@@ -370,7 +380,7 @@ For each candidate vulnerability (these are NOT confirmed yet — Phase 2b will 
 - **Severity**: High+ / High / Medium / Low / Informational
 - **Location**: file:line
 - **Gate 0 (intended behavior?)**: [is this the application's designed purpose?]
-- **Gate 1 (reachable?)**: [Grep usages result — N production call sites found]
+- **Gate 1 (reachable?)**: [N production call sites found; method: lsp+grep | grep-only]
 - **Gate 2a (attacker-controlled?)**: [who controls the input, traced to origin]
 - **Gate 2b (sanitization?)**: [what sanitization exists, does it match the sink context]
 - **Gate 3 (new capability?)**: [what attacker gains vs. what prerequisite already gives]
