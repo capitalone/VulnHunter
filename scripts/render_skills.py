@@ -215,8 +215,12 @@ def _apply_override(spec: dict, files: dict[str, RenderedFile], adapter_dir: Pat
 
 def _apply_drop(spec: dict, files: dict[str, RenderedFile], stats: dict):
     pattern = spec.get("files")
+    if not pattern:
+        raise TransformError(f"drop missing 'files': {spec}")
     rx = _glob_to_regex(pattern)
     doomed = [p for p in files if rx.match(p)]
+    if not doomed:
+        raise TransformError(f"drop matched no rendered files: {pattern!r}")
     for p in doomed:
         del files[p]
     stats["dropped"] += len(doomed)

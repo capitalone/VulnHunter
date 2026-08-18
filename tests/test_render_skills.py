@@ -60,6 +60,39 @@ class TestClaudeCodeIdentity(unittest.TestCase):
                 )
 
 
+class TestDropValidation(unittest.TestCase):
+    """`drop` must fail loudly like the other applicators, not silently no-op.
+
+    Matches the fail-loud invariant the renderer relies on: a missing
+    ``files`` key or a pattern that matches nothing is a broken transform,
+    not a clean render.
+    """
+
+    def _files(self):
+        return {
+            "vulnhunt/SKILL.md": render_skills.RenderedFile(path="vulnhunt/SKILL.md", text="x"),
+            "vulnhunt/phases/p1.md": render_skills.RenderedFile(path="vulnhunt/phases/p1.md", text="y"),
+        }
+
+    def test_drop_missing_files_key_raises(self):
+        with self.assertRaises(render_skills.TransformError):
+            render_skills._apply_drop({"type": "drop"}, self._files(), {"dropped": 0})
+
+    def test_drop_matching_nothing_raises(self):
+        with self.assertRaises(render_skills.TransformError):
+            render_skills._apply_drop(
+                {"type": "drop", "files": "vulnhunt/nope-*.md"}, self._files(), {"dropped": 0}
+            )
+
+    def test_drop_removes_matches(self):
+        files = self._files()
+        stats = {"dropped": 0}
+        render_skills._apply_drop({"type": "drop", "files": "vulnhunt/phases/*.md"}, files, stats)
+        self.assertNotIn("vulnhunt/phases/p1.md", files)
+        self.assertIn("vulnhunt/SKILL.md", files)
+        self.assertEqual(stats["dropped"], 1)
+
+
 class TestCopyIgnore(unittest.TestCase):
     """COPY_IGNORE must actually exclude build detritus from rendered bundles.
 

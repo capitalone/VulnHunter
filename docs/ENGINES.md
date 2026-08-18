@@ -29,8 +29,12 @@ Three layers, each independently extensible:
    `ScanEngine` protocol (`get_engine(config)`) with `claude-code` (the
    existing SDK path), `hermes`, `copilot`, and `codex` subprocess
    implementations. All engines share the results-directory success
-   contract (`*_VULNHUNT_RESULTS_*` + `scan_manifest.json`), so publish /
-   issues / audit / verify stages are engine-agnostic. Select with
+   contract — a `*_VULNHUNT_RESULTS_*` directory containing the scan's
+   `README.md` report (the subprocess engines pre-create the directory, so
+   its mere existence is not success; a run that writes no report is a
+   failure). Downstream publish / issues / audit / verify stages are
+   engine-agnostic and consume the same `*_VULNHUNT_RESULTS_*` +
+   `scan_manifest.json` layout. Select with
    `[scan] engine = "…"` in the agent TOML; tune with
    `engine_command`, `engine_provider`, `engine_timeout_seconds`,
    `engine_extra_args`.
