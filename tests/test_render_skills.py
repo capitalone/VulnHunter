@@ -49,7 +49,7 @@ class TestClaudeCodeIdentity(unittest.TestCase):
             src_files = sorted(
                 p.relative_to(src).as_posix()
                 for p in src.rglob("*")
-                if p.is_file() and not render_skills.COPY_IGNORE(p, p.name)
+                if p.is_file() and not render_skills.is_ignored(p)
             )
             dst_files = sorted(p.relative_to(dst).as_posix() for p in dst.rglob("*") if p.is_file())
             self.assertEqual(src_files, dst_files, f"{skill}: file lists differ")
@@ -58,6 +58,47 @@ class TestClaudeCodeIdentity(unittest.TestCase):
                     filecmp.cmp(src / rel, dst / rel, shallow=False),
                     f"{skill}/{rel}: differs from source",
                 )
+
+
+class TestCopyIgnore(unittest.TestCase):
+    """COPY_IGNORE must actually exclude build detritus from rendered bundles.
+
+    Regression for the ``COPY_IGNORE(p, p.name)`` arg-shape bug: passing a
+    bare str made ``fnmatch.filter`` iterate its characters, so the ignore
+    never fired and ``__pycache__``/``*.pyc``/``.venv`` leaked into dist/.
+    """
+
+    def test_is_ignored_matches_patterns(self):
+        self.assertTrue(render_skills.is_ignored(Path("/x/__pycache__")))
+        self.assertTrue(render_skills.is_ignored(Path("/x/junk.pyc")))
+        self.assertTrue(render_skills.is_ignored(Path("/x/.venv")))
+        self.assertTrue(render_skills.is_ignored(Path("/x/.installed-from")))
+        self.assertFalse(render_skills.is_ignored(Path("/x/SKILL.md")))
+        self.assertFalse(render_skills.is_ignored(Path("/x/phase1.md")))
+
+    def test_pyc_detritus_excluded_from_render(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Minimal skill source + planted build detritus.
+            skill_src = root / "vulnhunt"
+            (skill_src / "phases").mkdir(parents=True)
+            (skill_src / "SKILL.md").write_text("# vulnhunt\n")
+            (skill_src / "phases" / "phase1.md").write_text("phase\n")
+            junk_dir = skill_src / "__pycache__"
+            junk_dir.mkdir()
+            (junk_dir / "junk.pyc").write_text("bytecode")
+            # A one-skill adapter manifest (identity transform).
+            adapter_dir = root / "adapters" / "probe"
+            adapter_dir.mkdir(parents=True)
+            (adapter_dir / "adapter.json").write_text(
+                json.dumps({"name": "probe", "skills": ["vulnhunt"], "transforms": []})
+            )
+            out = root / "dist"
+            render_skills.render_adapter(adapter_dir, root, out)
+            rendered = out / "probe"
+            leaked = [p for p in rendered.rglob("*") if p.suffix == ".pyc" or p.name == "__pycache__"]
+            self.assertEqual(leaked, [], f"detritus leaked into render: {leaked}")
+            self.assertTrue((rendered / "vulnhunt" / "SKILL.md").is_file())
 
 
 class TestAdapterManifests(unittest.TestCase):
@@ -71,10 +112,16 @@ class TestAdapterManifests(unittest.TestCase):
                 self.assertTrue((REPO_ROOT / skill / "SKILL.md").is_file())
 
     def test_substitute_find_strings_exist_in_sources(self):
-        """Every non-optional 'find' must be present in the current sources.
+        """Every non-optional 'find' must be present in the current sources
+        AND declare a matching ``count``.
 
         This is the drift tripwire: when someone edits a prompt line that an
-        adapter rewrites, this fails with the exact missing string.
+        adapter rewrites, this fails with the exact missing string. Requiring
+        ``count`` (and asserting the exact occurrence total) makes the
+        tripwire actually trip on a *partial* rewrite too — a source edit
+        that duplicates or half-rewords a phrase changes the occurrence
+        count, so a bare "present at least once" check would pass while the
+        transform silently rewrites the wrong number of sites.
         """
         for adapter_dir in sorted(ADAPTERS.iterdir()):
             manifest = adapter_dir / "adapter.json"
@@ -85,13 +132,19 @@ class TestAdapterManifests(unittest.TestCase):
                 for i, spec in enumerate(cfg["transforms"]):
                     if spec.get("type") != "substitute" or spec.get("optional"):
                         continue
+                    self.assertIn(
+                        "count",
+                        spec,
+                        f"{adapter_dir.name} transform[{i}]: non-optional substitute "
+                        f"must declare 'count' (drift tripwire): {spec['find']!r}",
+                    )
                     pattern = spec["files"]
                     rx = render_skills._glob_to_regex(pattern)
                     targets = [
                         f"{skill}/{p.relative_to(REPO_ROOT / skill).as_posix()}"
                         for p in sorted((REPO_ROOT / skill).rglob("*"))
                         if p.is_file()
-                        and not render_skills.COPY_IGNORE(p, p.name)
+                        and not render_skills.is_ignored(p)
                         and rx.match(f"{skill}/{p.relative_to(REPO_ROOT / skill).as_posix()}")
                     ]
                     self.assertTrue(targets, f"{adapter_dir.name} transform[{i}]: no files match {pattern}")
@@ -104,6 +157,24 @@ class TestAdapterManifests(unittest.TestCase):
                         0,
                         f"{adapter_dir.name} transform[{i}]: find-string no longer in sources: {spec['find']!r}",
                     )
+
+    def test_every_nonoptional_substitute_declares_count(self):
+        """Independent, adapter-wide guard: no non-optional substitute may
+        omit ``count``. Kept separate from the source-presence check so a new
+        adapter that forgets a count fails even if its find-string exists."""
+        for adapter_dir in sorted(ADAPTERS.iterdir()):
+            manifest = adapter_dir / "adapter.json"
+            if not manifest.is_file():
+                continue
+            cfg = json.loads(manifest.read_text(encoding="utf-8"))
+            for i, spec in enumerate(cfg["transforms"]):
+                if spec.get("type") != "substitute" or spec.get("optional"):
+                    continue
+                self.assertIn(
+                    "count",
+                    spec,
+                    f"{adapter_dir.name} transform[{i}] is missing 'count'",
+                )
 
 
 class TestHermesRender(unittest.TestCase):

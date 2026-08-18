@@ -10,9 +10,8 @@ from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
+from . import config
 from .config import (
-    ENGINE,
-    ENGINE_SKILLS_DIR,
     MAX_SCAN_WORKERS,
     MODEL,
     PHASES_DIR,
@@ -183,7 +182,7 @@ def build_scan_command(folder_path, prompt, engine=None, readonly=False):
     Other engines drive the same installed skill through their headless
     contract; success is still judged by the *_VULNHUNT_RESULTS_* dir.
     """
-    engine = engine or ENGINE
+    engine = engine or config.ENGINE
     if engine == "claude-code":
         return [
             "claude", "-p", prompt,
@@ -232,13 +231,15 @@ def scan_folder(folder_path, log_file=None, readonly=False, engine=None):
     Returns a ScanResult (folder_path, label, returncode, event_count,
     elapsed, results_dir, cost_data).
     """
-    engine = engine or ENGINE
+    engine = engine or config.ENGINE
     label = os.path.basename(folder_path)
 
     if log_file is None:
         log_file = os.path.join(folder_path, "benchmark_scan.log")
 
-    skills_dir = ENGINE_SKILLS_DIR if engine != "claude-code" else SKILLS_DIR
+    # Resolve the skills dir from the *effective* engine (not the import-time
+    # default) so an engine= override or a mutated env is honored.
+    skills_dir = config.skills_dir_for(engine) if engine != "claude-code" else SKILLS_DIR
     if not os.path.isdir(skills_dir):
         print(f"  [{ts()}] [{label}] Error: Skill not installed for engine "
               f"'{engine}'. Run install.sh --target {engine} first.")
@@ -375,7 +376,7 @@ def scan_targets(targets, max_workers=None, status_interval=300, log_filename=No
         max_workers = MAX_SCAN_WORKERS
 
     print(f"\n[{ts()}] Starting scans for {len(targets)} targets "
-          f"(engine {engine or ENGINE}, max {max_workers} parallel)", flush=True)
+          f"(engine {engine or config.ENGINE}, max {max_workers} parallel)", flush=True)
 
     results = []
     completed_keys = set()

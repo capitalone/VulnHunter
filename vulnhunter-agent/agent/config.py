@@ -22,6 +22,7 @@ every required value is supplied via env vars.
 from __future__ import annotations
 
 import os
+import shlex
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -132,7 +133,9 @@ class ScanConfig:
     # Hard cap for one engine-driven scan, seconds (CLI engines only).
     engine_timeout_seconds: int = 21_600
     # Extra CLI flags appended to the engine invocation (e.g. Copilot
-    # ``--allow-tool`` patterns). Split on commas for readability.
+    # ``--allow-tool`` patterns). Give a native TOML list —
+    # ``["--allow-tool", "shell(ls,cat)"]`` — so args with commas, spaces,
+    # or parens survive intact; a bare string is shlex-split as a fallback.
     engine_extra_args: list[str] = field(default_factory=list)
 
 
@@ -426,6 +429,28 @@ def _resolve(
     return value
 
 
+def _parse_engine_extra_args(raw: Any) -> list[str]:
+    """Normalize ``[scan] engine_extra_args`` to a clean argv list.
+
+    A native TOML list (``["--allow-tool", "shell(ls,cat)"]``) is the
+    canonical form and is passed through verbatim — this preserves args
+    that contain commas, spaces, or parentheses, exactly the Copilot
+    ``--allow-tool shell(ls,cat)`` case a naive comma split would shred.
+
+    A bare string (e.g. from an env override, which can't express a list)
+    is tokenized with ``shlex.split`` so quoting works the way a shell
+    user expects: ``"--allow-tool 'shell(ls,cat)'"`` → two args.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        return [str(a) for a in raw if str(a).strip()]
+    text = str(raw).strip()
+    if not text:
+        return []
+    return [a for a in shlex.split(text) if a.strip()]
+
+
 def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
     """Load and validate the agent's configuration.
 
@@ -635,17 +660,15 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
                 scan_raw, "scan", "engine_timeout_seconds", kind=int, default=21_600
             )
         ),
-        engine_extra_args=str(
-            _resolve(scan_raw, "scan", "engine_extra_args", default="")
-        ).split(","),
+        engine_extra_args=_parse_engine_extra_args(
+            _resolve(scan_raw, "scan", "engine_extra_args", default=[])
+        ),
     )
     if scan.engine not in ENGINE_NAMES:
         raise ValueError(
             f"[scan] engine must be one of {', '.join(ENGINE_NAMES)}; "
             f"got {scan.engine!r}"
         )
-    extra_args = [a.strip() for a in scan.engine_extra_args if a.strip()]
-    scan = replace(scan, engine_extra_args=extra_args)
 
     github = GitHubConfig(
         host=str(_resolve(github_raw, "github", "host", default="github.com")),

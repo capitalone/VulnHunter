@@ -5,8 +5,11 @@ against a clone: the Claude Agent SDK (reference), the Hermes CLI, the
 GitHub Copilot CLI, ... All engines share one contract:
 
   - success is judged by the VulnHunter results contract — a
-    ``*_VULNHUNT_RESULTS_*`` directory inside the clone — never by stdout
-    text, which differs per harness;
+    ``*_VULNHUNT_RESULTS_*`` directory that actually contains the skill's
+    ``README.md`` report — never by stdout text, which differs per
+    harness, and never by the directory's mere existence (the subprocess
+    engines pre-create it, so an engine that crashes before writing must
+    still be judged a failure);
   - the kickoff prompt carries the same "Pre-resolved scan metadata"
     block the skill's Mandatory First Actions expect (results dir, branch
     label, repo URL, model tag, shell availability), so the skill runs
@@ -14,15 +17,20 @@ GitHub Copilot CLI, ... All engines share one contract:
   - downstream stages (manifest, publish, issues, audit, verify) are
     engine-agnostic and consume only the results contract.
 
-Select via ``[scan] engine = "claude-code" | "hermes" | "copilot"`` in the
-agent TOML (default ``claude-code`` — the existing SDK path, unchanged).
+Select via ``[scan] engine = "claude-code" | "hermes" | "copilot" |
+"codex"`` in the agent TOML (default ``claude-code`` — the existing SDK
+path, unchanged).
+
+The three subprocess engines (hermes/copilot/codex) share a single
+``SubprocessEngine`` base (``agent/engines/_subprocess.py``); each concrete
+engine only declares its binary name, skill path, argv, and kickoff prompt.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from agent._stream_events import SessionTotals
@@ -30,6 +38,15 @@ if TYPE_CHECKING:
     from agent.config import AgentConfig
 
 ENGINE_NAMES = ("claude-code", "hermes", "copilot", "codex")
+
+
+class EngineError(RuntimeError):
+    """Engine-level failure (binary missing, timeout, non-zero/empty result).
+
+    Lives here — next to ``ScanSpec`` / ``ScanEngine`` — rather than in any
+    one engine module, so importing a single engine doesn't drag in an
+    unrelated one purely for the exception type.
+    """
 
 
 @dataclass(frozen=True)
@@ -43,16 +60,6 @@ class ScanSpec:
     read_only: bool = True
     enable_bash: bool = False
     backoffs: tuple[float, ...] = ()
-
-
-@dataclass
-class ScanOutcome:
-    """Engine-run result. ``results_dir`` None ⇒ scan produced nothing."""
-
-    results_dir: Path | None
-    exit_code: int = 0
-    engine: str = ""
-    detail: dict[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable
@@ -71,8 +78,9 @@ class ScanEngine(Protocol):
         """Run /vulnhunt against ``spec.clone_dir``; return the results dir.
 
         Raises on pre-flight failures (missing skill, prior results,
-        engine binary absent, engine timeout). A None return means the
-        engine finished without producing a results directory.
+        engine binary absent, engine timeout) and on a run that finishes
+        without a complete results directory. A None return means the
+        engine finished cleanly but produced no results directory.
         """
         ...  # pragma: no cover
 
@@ -80,7 +88,8 @@ class ScanEngine(Protocol):
 def get_engine(config: "AgentConfig") -> ScanEngine:
     """Instantiate the engine selected by ``[scan] engine``."""
     # Local imports keep module import cheap and avoid cycles: the engine
-    # modules import runner helpers, runner imports nothing from here.
+    # modules import runner helpers, runner imports config, config imports
+    # this package — so the concrete engines must not load at package import.
     name = config.scan.engine
     if name == "claude-code":
         from agent.engines.claude_code import ClaudeCodeEngine
@@ -106,8 +115,8 @@ def get_engine(config: "AgentConfig") -> ScanEngine:
 
 __all__ = [
     "ENGINE_NAMES",
+    "EngineError",
     "ScanEngine",
-    "ScanOutcome",
     "ScanSpec",
     "get_engine",
 ]

@@ -28,7 +28,13 @@ File patterns are matched against the path relative to dist/<adapter>/ and
 support ``**`` (any depth), ``*`` (within one segment) and ``?``.
 
 Usage:
-  python3 scripts/render_skills.py [--adapter NAME|all] [--check] [--out DIR]
+  python3 scripts/render_skills.py [--adapter NAME|all] [--out DIR]
+  python3 scripts/render_skills.py --adapter NAME --check --baseline DIR
+
+``--check`` compares a fresh render against ``--baseline`` (a previously
+rendered tree). ``dist/`` is gitignored and rendered fresh in CI, so
+``--check`` has no committed tree to diff against and requires an explicit
+baseline; CI verifies byte-identity through ``tests/test_render_skills.py``.
 """
 
 from __future__ import annotations
@@ -46,6 +52,18 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ALL_SKILLS = ("vulnhunt", "vulnhunt-fix-verify", "vulnhunter-fix")
 COPY_IGNORE = shutil.ignore_patterns(".installed-from", ".venv", "__pycache__", "*.pyc")
+
+
+def is_ignored(path: Path) -> bool:
+    """True when ``path`` matches a COPY_IGNORE pattern.
+
+    ``shutil.ignore_patterns`` returns a callable expecting
+    ``(dir, names_iterable)`` and returning the set of ignored names — it
+    must be given an iterable, never a bare str (which it would iterate
+    character-by-character, matching nothing). Centralizing the call here
+    keeps the correct shape in one place for both the renderer and tests.
+    """
+    return path.name in COPY_IGNORE(str(path.parent), [path.name])
 
 
 class TransformError(Exception):
@@ -221,7 +239,7 @@ def render_adapter(adapter_dir: Path, repo_root: Path, out_root: Path) -> dict:
         if not (src / "SKILL.md").is_file():
             raise TransformError(f"skill source missing SKILL.md: {src}")
         for p in sorted(src.rglob("*")):
-            if not p.is_file() or COPY_IGNORE(p, p.name):
+            if not p.is_file() or is_ignored(p):
                 continue
             rel = f"{skill}/{p.relative_to(src).as_posix()}"
             try:
@@ -251,34 +269,46 @@ def render_adapter(adapter_dir: Path, repo_root: Path, out_root: Path) -> dict:
     return {"adapter": cfg["name"], "skills": cfg["skills"], "files": len(files), **stats}
 
 
-def check_render(adapter_dir: Path, repo_root: Path) -> bool:
-    """Render into a temp dir and compare with the committed dist/ output."""
+def check_render(adapter_dir: Path, repo_root: Path, baseline_root: Path) -> bool:
+    """Render into a temp dir and compare with a supplied baseline.
+
+    ``baseline_root`` holds a previously rendered ``<adapter>/`` tree (an
+    installed bundle, a pinned reference render, etc.). ``dist/`` is
+    gitignored and rendered fresh in CI, so there is no committed tree to
+    diff against — the caller must point ``--baseline`` at whatever
+    reference it wants to verify (the same fresh render is emitted with
+    ``render_skills.py --out <dir>`` first).
+    """
     cfg = load_adapter(adapter_dir)
     with tempfile.TemporaryDirectory() as tmp:
         tmp_out = Path(tmp)
         render_adapter(adapter_dir, repo_root, tmp_out)
-        committed = repo_root / "dist" / cfg["name"]
+        baseline = baseline_root / cfg["name"]
         fresh = tmp_out / cfg["name"]
-        if not committed.is_dir():
-            print(f"dist/{cfg['name']}: not rendered yet (run render_skills.py)", file=sys.stderr)
-            return False
-        committed_files = {
-            p.relative_to(committed).as_posix()
-            for p in committed.rglob("*")
-            if p.is_file()
-        }
-        fresh_files = {p.relative_to(fresh).as_posix() for p in fresh.rglob("*") if p.is_file()}
-        if committed_files != fresh_files:
+        if not baseline.is_dir():
             print(
-                f"dist/{cfg['name']}: file sets differ "
-                f"(missing={sorted(committed_files - fresh_files)} "
-                f"extra={sorted(fresh_files - committed_files)})",
+                f"{baseline}: baseline not found — render one first "
+                f"(render_skills.py --adapter {cfg['name']} --out {baseline_root})",
                 file=sys.stderr,
             )
             return False
-        for rel in sorted(committed_files):
-            if (committed / rel).read_bytes() != (fresh / rel).read_bytes():
-                print(f"dist/{cfg['name']}/{rel}: content differs from fresh render", file=sys.stderr)
+        baseline_files = {
+            p.relative_to(baseline).as_posix()
+            for p in baseline.rglob("*")
+            if p.is_file()
+        }
+        fresh_files = {p.relative_to(fresh).as_posix() for p in fresh.rglob("*") if p.is_file()}
+        if baseline_files != fresh_files:
+            print(
+                f"{baseline}: file sets differ "
+                f"(missing={sorted(baseline_files - fresh_files)} "
+                f"extra={sorted(fresh_files - baseline_files)})",
+                file=sys.stderr,
+            )
+            return False
+        for rel in sorted(baseline_files):
+            if (baseline / rel).read_bytes() != (fresh / rel).read_bytes():
+                print(f"{baseline}/{rel}: content differs from fresh render", file=sys.stderr)
                 return False
     return True
 
@@ -291,7 +321,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--check",
         action="store_true",
-        help="verify committed dist/ matches a fresh render; no files written",
+        help="verify a fresh render matches --baseline; no files written",
+    )
+    ap.add_argument(
+        "--baseline",
+        default=None,
+        help="baseline render root to compare against with --check "
+        "(holds <adapter>/ subtrees; e.g. a prior --out dir or installed bundle)",
     )
     args = ap.parse_args(argv)
 
@@ -301,6 +337,14 @@ def main(argv: list[str] | None = None) -> int:
     if not adapters_root.is_dir():
         print(f"error: {adapters_root} not found", file=sys.stderr)
         return 2
+    if args.check and not args.baseline:
+        print(
+            "error: --check requires --baseline DIR (dist/ is gitignored and "
+            "rendered fresh, so there is no committed tree to diff against)",
+            file=sys.stderr,
+        )
+        return 2
+    baseline_root = Path(args.baseline).resolve() if args.baseline else None
 
     names = (
         sorted(p.name for p in adapters_root.iterdir() if (p / "adapter.json").is_file())
@@ -313,8 +357,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: unknown adapter {name!r}", file=sys.stderr)
             return 2
         if args.check:
-            ok = check_render(adapter_dir, repo_root)
-            print(f"dist/{name}: {'OK' if ok else 'STALE'}")
+            assert baseline_root is not None  # guaranteed by the check above
+            ok = check_render(adapter_dir, repo_root, baseline_root)
+            print(f"{name}: {'OK' if ok else 'STALE'}")
             if not ok:
                 return 1
         else:

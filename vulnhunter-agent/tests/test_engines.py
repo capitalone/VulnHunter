@@ -2,8 +2,14 @@
 
 All subprocess execution is faked — these tests verify command
 construction, pre-staging (results dir, prior-results guard), the
-results-directory success contract, and config wiring. No real hermes /
-copilot / claude invocation happens.
+*contents-based* results-directory success contract (an empty results dir
+is a failure, not a clean scan), timeout handling, and config wiring. No
+real hermes / copilot / codex / claude invocation happens.
+
+The three subprocess engines share ``SubprocessEngine``; the shared
+behaviors (success contract, non-zero exit, timeout, extra-args) are
+covered once, parametrized across all three, so no engine's copy can
+regress independently.
 """
 
 from __future__ import annotations
@@ -15,11 +21,16 @@ from types import SimpleNamespace
 import pytest
 
 from agent import engines
-from agent.engines import ENGINE_NAMES, ScanSpec, get_engine
+from agent.engines import _subprocess as _subprocess_mod
+from agent.engines import ENGINE_NAMES, EngineError, ScanSpec, get_engine
 from agent.engines.claude_code import ClaudeCodeEngine
 from agent.engines.codex import CodexEngine
 from agent.engines.copilot import CopilotCliEngine
-from agent.engines.hermes import EngineError, HermesEngine
+from agent.engines.hermes import EngineError as HermesEngineError
+from agent.engines.hermes import HermesEngine
+
+# A README long enough to clear the >100-byte completion floor.
+_VALID_README = "# VulnHunter Results\n\n" + ("finding detail. " * 20)
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +58,11 @@ class TestGetEngine:
 
     def test_engine_names_cover_registry(self) -> None:
         assert ENGINE_NAMES == ("claude-code", "hermes", "copilot", "codex")
+
+    def test_engine_error_is_shared_symbol(self) -> None:
+        # EngineError's home is engines/__init__; the hermes re-export must
+        # be the very same class so `except EngineError` catches all engines.
+        assert HermesEngineError is EngineError
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +107,7 @@ engine = "hermes"
 engine_command = "/opt/hermes/bin/hermes"
 engine_provider = "anthropic"
 engine_timeout_seconds = 3600
-engine_extra_args = "--accept-hooks,--reasoning=high"
+engine_extra_args = ["--accept-hooks", "--reasoning=high"]
 """
             )
         )
@@ -101,6 +117,24 @@ engine_extra_args = "--accept-hooks,--reasoning=high"
         assert cfg.scan.engine_provider == "anthropic"
         assert cfg.scan.engine_timeout_seconds == 3600
         assert cfg.scan.engine_extra_args == ["--accept-hooks", "--reasoning=high"]
+
+    def test_extra_args_string_is_shlex_split(self, tmp_path: Path) -> None:
+        # A bare string is accepted for convenience and shlex-split, so a
+        # value with commas/parens survives intact (Copilot --allow-tool).
+        from agent.config import load_config
+
+        path = tmp_path / "cfg.toml"
+        path.write_text(
+            self._toml(
+                """
+[scan]
+engine = "copilot"
+engine_extra_args = "--allow-tool 'shell(ls,cat)'"
+"""
+            )
+        )
+        cfg = load_config(path)
+        assert cfg.scan.engine_extra_args == ["--allow-tool", "shell(ls,cat)"]
 
     def test_invalid_engine_rejected(self, tmp_path: Path) -> None:
         from agent.config import load_config
@@ -112,7 +146,7 @@ engine_extra_args = "--accept-hooks,--reasoning=high"
 
 
 # ---------------------------------------------------------------------------
-# Hermes engine
+# Fakes / helpers shared across the subprocess engines
 # ---------------------------------------------------------------------------
 
 
@@ -133,10 +167,64 @@ class _FakeProc:
         return self.returncode
 
 
-def _hermes_spec(tmp_path: Path, **scan_overrides) -> ScanSpec:
+def _find_results_dir(clone_dir: Path) -> Path | None:
+    if not clone_dir.is_dir():
+        return None
+    for entry in clone_dir.iterdir():
+        if entry.is_dir() and "_VULNHUNT_RESULTS_" in entry.name:
+            return entry
+    return None
+
+
+def _exec_writing_readme(returncode: int = 0, stdout: bytes = b"ok", stderr: bytes = b""):
+    """Fake create_subprocess_exec that simulates a *completed* scan.
+
+    The engine pre-creates the results dir before launching, so the fake
+    finds it (via cwd) and drops a valid README.md — mirroring what a real
+    engine does on success. This is what makes the contents-based contract
+    return the dir.
+    """
+    async def fake_exec(*cmd, **kw):
+        clone_dir = Path(kw["cwd"])
+        results = _find_results_dir(clone_dir)
+        if results is not None:
+            (results / "README.md").write_text(_VALID_README)
+        return _FakeProc(returncode, stdout, stderr)
+
+    return fake_exec
+
+
+def _exec_leaving_empty(returncode: int = 0, stdout: bytes = b"", stderr: bytes = b"boom"):
+    """Fake exec that leaves the pre-created results dir EMPTY (crash/OOM)."""
+    async def fake_exec(*cmd, **kw):
+        return _FakeProc(returncode, stdout, stderr)
+
+    return fake_exec
+
+
+def _capturing_exec(captured: list, returncode: int = 0):
+    async def fake_exec(*cmd, **kw):
+        captured.append((cmd, kw))
+        clone_dir = Path(kw["cwd"])
+        results = _find_results_dir(clone_dir)
+        if results is not None:
+            (results / "README.md").write_text(_VALID_README)
+        return _FakeProc(returncode)
+
+    return fake_exec
+
+
+def _spec(
+    tmp_path: Path,
+    engine_name: str = "hermes",
+    *,
+    read_only: bool = True,
+    enable_bash: bool = False,
+    **scan_overrides,
+) -> ScanSpec:
     scan_fields = dict(
-        engine="hermes",
-        engine_command="/fake/hermes",
+        engine=engine_name,
+        engine_command=f"/fake/{engine_name}",
         engine_provider="",
         engine_timeout_seconds=60,
         engine_extra_args=[],
@@ -148,49 +236,178 @@ def _hermes_spec(tmp_path: Path, **scan_overrides) -> ScanSpec:
         clone_dir=tmp_path / "clone",
         config=SimpleNamespace(scan=scan, audit=audit, anthropic=SimpleNamespace()),
         model="claude-opus-4-8",
-        read_only=True,
-        enable_bash=False,
+        read_only=read_only,
+        enable_bash=enable_bash,
     )
 
 
-@pytest.fixture
-def hermes_skill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+# Per-engine wiring: the engine class and how to point its skill lookup at a
+# temp SKILL.md. Subprocess launch lives in the shared base, so all exec
+# patching targets ``agent.engines._subprocess`` regardless of engine.
+_SUBPROC = _subprocess_mod
+_ENGINE_TABLE = [
+    ("hermes", HermesEngine, "agent.engines.hermes._HERMES_SKILL_CANDIDATES", True),
+    ("copilot", CopilotCliEngine, "agent.engines.copilot._COPILOT_SKILL", False),
+    ("codex", CodexEngine, "agent.engines.codex._CODEX_SKILL", False),
+]
+
+
+def _install_skill(monkeypatch, tmp_path: Path, attr: str, as_tuple: bool) -> Path:
     skill = tmp_path / "SKILL.md"
     skill.write_text("# vulnhunt\n")
-    monkeypatch.setattr(
-        "agent.engines.hermes._HERMES_SKILL_CANDIDATES", (skill,)
-    )
+    monkeypatch.setattr(attr, (skill,) if as_tuple else skill)
     return skill
 
 
-class TestHermesEngine:
-    async def test_missing_skill_raises(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setattr(
-            "agent.engines.hermes._HERMES_SKILL_CANDIDATES",
-            (tmp_path / "nope" / "SKILL.md",),
-        )
-        spec = _hermes_spec(tmp_path)
-        with pytest.raises(EngineError, match="install.sh --target hermes"):
-            await HermesEngine().run_scan(spec)
+# ---------------------------------------------------------------------------
+# Shared subprocess-engine contract (parametrized across all three)
+# ---------------------------------------------------------------------------
 
-    async def test_missing_binary_raises(self, tmp_path: Path, hermes_skill, monkeypatch):
-        monkeypatch.setattr("agent.engines.hermes.shutil.which", lambda name: None)
-        spec = _hermes_spec(tmp_path, engine_command="")
+
+@pytest.mark.parametrize("name,cls,skill_attr,as_tuple", _ENGINE_TABLE)
+class TestSubprocessEngineContract:
+    async def test_missing_skill_raises(
+        self, tmp_path, monkeypatch, name, cls, skill_attr, as_tuple
+    ):
+        missing = tmp_path / "nope" / "SKILL.md"
+        monkeypatch.setattr(skill_attr, (missing,) if as_tuple else missing)
+        spec = _spec(tmp_path, name)
+        with pytest.raises(EngineError, match=f"install.sh --target {name}"):
+            await cls().run_scan(spec)
+
+    async def test_missing_binary_raises(
+        self, tmp_path, monkeypatch, name, cls, skill_attr, as_tuple
+    ):
+        _install_skill(monkeypatch, tmp_path, skill_attr, as_tuple)
+        monkeypatch.setattr("agent.engines._subprocess.shutil.which", lambda n: None)
+        spec = _spec(tmp_path, name, engine_command="")
         spec.clone_dir.mkdir(parents=True)
-        with pytest.raises(EngineError, match="hermes binary not found"):
-            await HermesEngine().run_scan(spec)
+        with pytest.raises(EngineError, match="binary not found"):
+            await cls().run_scan(spec)
 
-    async def test_command_construction_read_only(
-        self, tmp_path: Path, hermes_skill, monkeypatch
-    ) -> None:
-        captured: list[tuple] = []
+    async def test_complete_results_dir_returned(
+        self, tmp_path, monkeypatch, name, cls, skill_attr, as_tuple
+    ):
+        _install_skill(monkeypatch, tmp_path, skill_attr, as_tuple)
+        monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", _exec_writing_readme(0))
+        spec = _spec(tmp_path, name)
+        spec.clone_dir.mkdir(parents=True)
+        results = await cls().run_scan(spec)
+        assert results is not None
+        assert "_VULNHUNT_RESULTS_" in results.name
+        assert (results / "README.md").is_file()
+
+    async def test_zero_exit_empty_results_is_failure(
+        self, tmp_path, monkeypatch, name, cls, skill_attr, as_tuple
+    ):
+        """The core fix: exit 0 but an empty results dir is NOT a clean scan.
+
+        A crashed/OOM-killed engine that returns 0 while writing nothing
+        must raise, not report the empty pre-created dir as success.
+        """
+        _install_skill(monkeypatch, tmp_path, skill_attr, as_tuple)
+        monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", _exec_leaving_empty(0))
+        spec = _spec(tmp_path, name)
+        spec.clone_dir.mkdir(parents=True)
+        with pytest.raises(EngineError, match="did not complete"):
+            await cls().run_scan(spec)
+
+    async def test_nonzero_exit_empty_results_raises(
+        self, tmp_path, monkeypatch, name, cls, skill_attr, as_tuple
+    ):
+        _install_skill(monkeypatch, tmp_path, skill_attr, as_tuple)
+        monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", _exec_leaving_empty(3))
+        spec = _spec(tmp_path, name)
+        spec.clone_dir.mkdir(parents=True)
+        with pytest.raises(EngineError, match="exited 3"):
+            await cls().run_scan(spec)
+
+    async def test_nonzero_exit_even_with_results_raises(
+        self, tmp_path, monkeypatch, name, cls, skill_attr, as_tuple
+    ):
+        """A non-zero exit is a failure even if a README got written."""
+        _install_skill(monkeypatch, tmp_path, skill_attr, as_tuple)
+        monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", _exec_writing_readme(1))
+        spec = _spec(tmp_path, name)
+        spec.clone_dir.mkdir(parents=True)
+        with pytest.raises(EngineError, match="exited 1"):
+            await cls().run_scan(spec)
+
+    async def test_timeout_kills_process(
+        self, tmp_path, monkeypatch, name, cls, skill_attr, as_tuple
+    ):
+        proc_holder: dict = {}
 
         async def fake_exec(*cmd, **kw):
-            captured.append((cmd, kw))
-            return _FakeProc(0)
+            proc = _FakeProc(0)
 
-        monkeypatch.setattr(engines.hermes.asyncio, "create_subprocess_exec", fake_exec)
-        spec = _hermes_spec(tmp_path)
+            async def communicate():
+                await asyncio.sleep(999)
+
+            proc.communicate = communicate
+            proc_holder["proc"] = proc
+            return proc
+
+        _install_skill(monkeypatch, tmp_path, skill_attr, as_tuple)
+        monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", fake_exec)
+        # A tiny positive timeout fires; 0/negative means "no timeout" (below).
+        spec = _spec(tmp_path, name, engine_timeout_seconds=0.01)
+        spec.clone_dir.mkdir(parents=True)
+        with pytest.raises(EngineError, match="engine_timeout_seconds"):
+            await cls().run_scan(spec)
+        assert proc_holder["proc"].killed
+
+    async def test_extra_args_appended(
+        self, tmp_path, monkeypatch, name, cls, skill_attr, as_tuple
+    ):
+        _install_skill(monkeypatch, tmp_path, skill_attr, as_tuple)
+        captured: list = []
+        monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", _capturing_exec(captured))
+        spec = _spec(tmp_path, name, engine_extra_args=["--allow-tool", "shell(ls,cat)"])
+        spec.clone_dir.mkdir(parents=True)
+        await cls().run_scan(spec)
+        cmd = list(captured[0][0])
+        # The exact whitespace/parens of the arg survive as a single token.
+        assert "--allow-tool" in cmd
+        assert "shell(ls,cat)" in cmd
+
+
+class TestTimeoutDisabled:
+    """engine_timeout_seconds <= 0 means 'no timeout', not 'instant timeout'."""
+
+    async def test_zero_timeout_waits_indefinitely(self, tmp_path, monkeypatch):
+        captured_timeouts: list = []
+        real_wait_for = asyncio.wait_for
+
+        async def spy_wait_for(aw, timeout):
+            captured_timeouts.append(timeout)
+            return await real_wait_for(aw, timeout)
+
+        skill = tmp_path / "SKILL.md"
+        skill.write_text("# vulnhunt\n")
+        monkeypatch.setattr("agent.engines.hermes._HERMES_SKILL_CANDIDATES", (skill,))
+        monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", _exec_writing_readme(0))
+        monkeypatch.setattr("agent.engines._subprocess.asyncio.wait_for", spy_wait_for)
+        spec = _spec(tmp_path, "hermes", engine_timeout_seconds=0)
+        spec.clone_dir.mkdir(parents=True)
+        await HermesEngine().run_scan(spec)
+        # None => asyncio.wait_for waits forever (no cap).
+        assert captured_timeouts == [None]
+
+
+# ---------------------------------------------------------------------------
+# Engine-specific command construction
+# ---------------------------------------------------------------------------
+
+
+class TestHermesCommand:
+    async def test_command_construction_read_only(self, tmp_path, monkeypatch):
+        skill = tmp_path / "SKILL.md"
+        skill.write_text("# vulnhunt\n")
+        monkeypatch.setattr("agent.engines.hermes._HERMES_SKILL_CANDIDATES", (skill,))
+        captured: list = []
+        monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", _capturing_exec(captured))
+        spec = _spec(tmp_path, "hermes")
         spec.clone_dir.mkdir(parents=True)
         results = await HermesEngine().run_scan(spec)
 
@@ -204,37 +421,21 @@ class TestHermesEngine:
         assert "VULNHUNT_DIR" in cmd[-1]
         assert "read-only" in cmd[-1]
         assert 'action="list"' in cmd[-1]  # delegation wait protocol
-        # Success contract: the pre-created results dir is returned.
-        assert results is not None
-        assert "_VULNHUNT_RESULTS_" in results.name
+        assert results is not None and "_VULNHUNT_RESULTS_" in results.name
 
-    async def test_command_construction_bash_and_provider(
-        self, tmp_path: Path, hermes_skill, monkeypatch
-    ) -> None:
-        captured: list[tuple] = []
-
-        async def fake_exec(*cmd, **kw):
-            captured.append((cmd, kw))
-            return _FakeProc(0)
-
-        monkeypatch.setattr(engines.hermes.asyncio, "create_subprocess_exec", fake_exec)
-        scan_cfg = SimpleNamespace(
-            engine="hermes",
-            engine_command="/fake/hermes",
-            engine_provider="anthropic",
-            engine_timeout_seconds=60,
-            engine_extra_args=["--reasoning=high"],
-        )
-        spec = ScanSpec(
-            clone_dir=tmp_path / "clone",
-            config=SimpleNamespace(
-                scan=scan_cfg,
-                audit=SimpleNamespace(app_id="app", actor="tester"),
-                anthropic=SimpleNamespace(),
-            ),
-            model="claude-opus-4-8",
+    async def test_command_construction_bash_and_provider(self, tmp_path, monkeypatch):
+        skill = tmp_path / "SKILL.md"
+        skill.write_text("# vulnhunt\n")
+        monkeypatch.setattr("agent.engines.hermes._HERMES_SKILL_CANDIDATES", (skill,))
+        captured: list = []
+        monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", _capturing_exec(captured))
+        spec = _spec(
+            tmp_path,
+            "hermes",
             read_only=False,
             enable_bash=True,
+            engine_provider="anthropic",
+            engine_extra_args=["--reasoning=high"],
         )
         spec.clone_dir.mkdir(parents=True)
         await HermesEngine().run_scan(spec)
@@ -244,97 +445,15 @@ class TestHermesEngine:
         assert cmd[cmd.index("--provider") + 1] == "anthropic"
         assert "--reasoning=high" in cmd
 
-    async def test_nonzero_exit_no_results_raises(
-        self, tmp_path: Path, hermes_skill, monkeypatch
-    ) -> None:
-        async def fake_exec(*cmd, **kw):
-            return _FakeProc(3, stdout=b"", stderr=b"boom")
 
-        monkeypatch.setattr(engines.hermes.asyncio, "create_subprocess_exec", fake_exec)
-        # Simulate "hermes produced nothing": results-dir discovery misses.
-        monkeypatch.setattr("agent.runner._find_results_dir", lambda d: None)
-        spec = _hermes_spec(tmp_path)
-        spec.clone_dir.mkdir(parents=True)
-        with pytest.raises(EngineError, match="exited 3"):
-            await HermesEngine().run_scan(spec)
-
-    async def test_nonzero_exit_with_results_returns_them(
-        self, tmp_path: Path, hermes_skill, monkeypatch
-    ) -> None:
-        async def fake_exec(*cmd, **kw):
-            return _FakeProc(1, stdout=b"warning", stderr=b"")
-
-        monkeypatch.setattr(engines.hermes.asyncio, "create_subprocess_exec", fake_exec)
-        spec = _hermes_spec(tmp_path)
-        spec.clone_dir.mkdir(parents=True)
-        results = await HermesEngine().run_scan(spec)
-        assert results is not None and "_VULNHUNT_RESULTS_" in results.name
-
-    async def test_timeout_kills_process(
-        self, tmp_path: Path, hermes_skill, monkeypatch
-    ) -> None:
-        proc_holder: dict = {}
-
-        async def fake_exec(*cmd, **kw):
-            proc = _FakeProc(0)
-
-            async def communicate():
-                await asyncio.sleep(999)
-
-            proc.communicate = communicate
-            proc_holder["proc"] = proc
-            return proc
-
-        monkeypatch.setattr(engines.hermes.asyncio, "create_subprocess_exec", fake_exec)
-        spec = _hermes_spec(tmp_path, engine_timeout_seconds=0)
-        spec.clone_dir.mkdir(parents=True)
-        with pytest.raises(EngineError, match="engine_timeout_seconds"):
-            await HermesEngine().run_scan(spec)
-        assert proc_holder["proc"].killed
-
-
-# ---------------------------------------------------------------------------
-# Copilot engine
-# ---------------------------------------------------------------------------
-
-
-class TestCopilotEngine:
-    async def test_missing_skill_raises(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setattr(
-            "agent.engines.copilot._COPILOT_SKILL", tmp_path / "nope.md"
-        )
-        spec = _hermes_spec(tmp_path)  # config shape is shared
-        with pytest.raises(EngineError, match="install.sh --target copilot"):
-            await CopilotCliEngine().run_scan(spec)
-
-    async def test_kickoff_points_at_skill_and_metadata(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+class TestCopilotCommand:
+    async def test_kickoff_points_at_skill_and_metadata(self, tmp_path, monkeypatch):
         skill = tmp_path / "SKILL.md"
         skill.write_text("# vulnhunt\n")
         monkeypatch.setattr("agent.engines.copilot._COPILOT_SKILL", skill)
-        captured: list[tuple] = []
-
-        async def fake_exec(*cmd, **kw):
-            captured.append((cmd, kw))
-            return _FakeProc(0)
-
-        monkeypatch.setattr(engines.copilot.asyncio, "create_subprocess_exec", fake_exec)
-        scan = SimpleNamespace(
-            engine="copilot",
-            engine_command="/fake/copilot",
-            engine_provider="",
-            engine_timeout_seconds=60,
-            engine_extra_args=["--allow-tool", "write"],
-        )
-        spec = ScanSpec(
-            clone_dir=tmp_path / "clone",
-            config=SimpleNamespace(
-                scan=scan, audit=SimpleNamespace(app_id="a", actor="t"), anthropic=SimpleNamespace()
-            ),
-            model="claude-opus-4-8",
-            read_only=True,
-        )
+        captured: list = []
+        monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", _capturing_exec(captured))
+        spec = _spec(tmp_path, "copilot", engine_extra_args=["--allow-tool", "write"])
         spec.clone_dir.mkdir(parents=True)
         results = await CopilotCliEngine().run_scan(spec)
 
@@ -349,46 +468,14 @@ class TestCopilotEngine:
         assert results is not None and "_VULNHUNT_RESULTS_" in results.name
 
 
-# ---------------------------------------------------------------------------
-# Codex engine
-# ---------------------------------------------------------------------------
-
-
-class TestCodexEngine:
-    async def test_missing_skill_raises(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setattr("agent.engines.codex._CODEX_SKILL", tmp_path / "nope.md")
-        spec = _hermes_spec(tmp_path)  # config shape is shared
-        with pytest.raises(EngineError, match="install.sh --target codex"):
-            await CodexEngine().run_scan(spec)
-
-    async def test_command_and_kickoff(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+class TestCodexCommand:
+    async def test_command_and_kickoff(self, tmp_path, monkeypatch):
         skill = tmp_path / "SKILL.md"
         skill.write_text("# vulnhunt\n")
         monkeypatch.setattr("agent.engines.codex._CODEX_SKILL", skill)
-        captured: list[tuple] = []
-
-        async def fake_exec(*cmd, **kw):
-            captured.append((cmd, kw))
-            return _FakeProc(0)
-
-        monkeypatch.setattr(engines.codex.asyncio, "create_subprocess_exec", fake_exec)
-        scan = SimpleNamespace(
-            engine="codex",
-            engine_command="/fake/codex",
-            engine_provider="",
-            engine_timeout_seconds=60,
-            engine_extra_args=["--skip-git-repo-check"],
-        )
-        spec = ScanSpec(
-            clone_dir=tmp_path / "clone",
-            config=SimpleNamespace(
-                scan=scan, audit=SimpleNamespace(app_id="a", actor="t"), anthropic=SimpleNamespace()
-            ),
-            model="claude-opus-4-8",
-            read_only=True,
-        )
+        captured: list = []
+        monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", _capturing_exec(captured))
+        spec = _spec(tmp_path, "codex", engine_extra_args=["--skip-git-repo-check"])
         spec.clone_dir.mkdir(parents=True)
         results = await CodexEngine().run_scan(spec)
 

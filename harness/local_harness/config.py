@@ -62,14 +62,35 @@ ENGINES = {
     },
 }
 
-for _name in (ENGINE, JUDGE_ENGINE):
-    if _name not in ENGINES:
+
+def validate_engine(name):
+    """Raise a clear ValueError if ``name`` isn't a known engine.
+
+    Deliberately NOT called at import time: a typo'd VULNHUNT_HARNESS_ENGINE
+    should fail at the point of use (``build_scan_command`` /
+    ``build_judge_command`` / ``scan_folder``) with a "you asked for engine
+    X" message, not break every ``import local_harness.config`` — including
+    ``--help`` paths and unrelated tooling — before anything runs.
+    """
+    if name not in ENGINES:
         raise ValueError(
-            f"unknown harness engine {_name!r} (supported: {', '.join(sorted(ENGINES))})"
+            f"unknown harness engine {name!r} (supported: {', '.join(sorted(ENGINES))})"
         )
+    return name
+
+
+def skills_dir_for(engine):
+    """Expanded skills directory for ``engine`` (validates first)."""
+    validate_engine(engine)
+    return os.path.expanduser(ENGINES[engine]["skills_dir"])
+
 
 # Engine-aware skills location (same value as SKILLS_DIR for claude-code).
-ENGINE_SKILLS_DIR = os.path.expanduser(ENGINES[ENGINE]["skills_dir"])
+# Computed with a safe fallback so a typo'd env var doesn't KeyError at
+# import — validation is deferred to the build/scan call sites above.
+ENGINE_SKILLS_DIR = os.path.expanduser(
+    ENGINES.get(ENGINE, ENGINES["claude-code"])["skills_dir"]
+)
 
 # --- Batch scanning (ad-hoc URL list) ---
 BATCH_CLONE_BASE_DIR = os.path.join(REPO_ROOT, "repos_being_scanned")

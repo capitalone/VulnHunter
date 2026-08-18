@@ -23,6 +23,31 @@ Status legend: ✅ verified locally, 📖 documented (not verified locally),
 | Auth | `ANTHROPIC_API_KEY`, Bedrock OAuth/SigV4 | `~/.hermes/.env` per-provider keys 📖 | GitHub auth (`gh` / device flow) 📖 | `OPENAI_API_KEY` / ChatGPT auth 📖 |
 | Programmatic result contract | results dir + `scan_manifest.json` (ours, harness-neutral) | same contract — judge by artifact presence, not stdout ✅ | same | same |
 
+## Subprocess-engine limitations (hermes / copilot / codex)
+
+The three subprocess engines (`agent/engines/`, sharing `SubprocessEngine`)
+differ from the Claude Agent SDK path in a few operator-visible ways:
+
+- **No cost/token totals.** The SDK path streams per-message usage into a
+  `SessionTotals`; the subprocess engines accept the `totals_out` argument
+  for protocol compatibility but cannot fill it (the CLIs don't expose
+  structured per-turn usage over the headless contract). Cost/token totals
+  therefore report **zero** for non-Claude runs. Judge the scan by the
+  results contract, not by reported cost.
+- **Success is contents-based, not exit-code-based.** The engine pre-creates
+  the `*_VULNHUNT_RESULTS_*` directory, so its existence proves nothing. A
+  run is a success only when that dir contains the skill's `README.md`
+  report (`runner._results_dir_is_complete`); a crashed / OOM-killed /
+  non-zero-exiting engine that wrote nothing is reported as a **failure**,
+  never as a clean "found nothing".
+- **`engine_timeout_seconds` semantics.** A positive value caps one scan; a
+  value **≤ 0 means "no timeout"** (wait indefinitely), not "time out
+  instantly". Set a large positive number for a long-but-bounded run.
+- **Timeout kill reaches the direct child only.** On timeout the engine
+  `kill()`s the CLI process it spawned; any subagent/worker processes that
+  CLI itself launched (hermes `delegate_task`, codex sequential passes) are
+  not directly reaped and rely on the child's own shutdown.
+
 ## VulnHunter-side coupling inventory (audit date: 2026-08-16)
 
 - `vulnhunt/SKILL.md`: `${CLAUDE_SKILL_DIR}`, `Grep`/`Glob` tool vocabulary,

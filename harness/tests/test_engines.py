@@ -111,10 +111,28 @@ class TestEngineConfig:
         assert cfg.ENGINE_SKILLS_DIR.endswith(".hermes/skills/vulnhunt")
         importlib.reload(config)
 
-    def test_unknown_engine_env_rejected(self, monkeypatch):
+    def test_unknown_engine_env_does_not_break_import(self, monkeypatch):
+        """A typo'd env var must NOT raise at import time.
+
+        Validation is deferred to the point of use so merely importing the
+        config (as --help paths and unrelated tooling do) stays safe. No
+        reload sequencing is needed to clean up global state.
+        """
         monkeypatch.setenv("VULNHUNT_HARNESS_ENGINE", "bad-engine")
         import importlib
+        cfg = importlib.reload(config)  # must not raise
+        assert cfg.ENGINE == "bad-engine"
+        # It fails clearly at the point of use instead:
         with pytest.raises(ValueError, match="unknown harness engine"):
-            importlib.reload(config)
+            cfg.validate_engine(cfg.ENGINE)
         monkeypatch.delenv("VULNHUNT_HARNESS_ENGINE")
         importlib.reload(config)
+
+    def test_validate_engine_accepts_known(self):
+        for name in ("claude-code", "hermes", "copilot", "codex"):
+            assert config.validate_engine(name) == name
+
+    def test_skills_dir_for_validates(self):
+        assert config.skills_dir_for("hermes").endswith(".hermes/skills/vulnhunt")
+        with pytest.raises(ValueError, match="unknown harness engine"):
+            config.skills_dir_for("nope")

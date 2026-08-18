@@ -1,7 +1,9 @@
 {
   "name": "hermes",
   "description": "Hermes Agent (weav). SKILL.md-compatible skills in ~/.hermes/skills; subagents via delegate_task; headless via 'hermes chat -q -Q -s vulnhunt'.",
-  "skills": ["vulnhunt"],
+  "skills": [
+    "vulnhunt"
+  ],
   "install": {
     "target_dir": "~/.hermes/skills",
     "script": "./install.sh --target hermes",
@@ -28,31 +30,36 @@
       "type": "substitute",
       "files": "vulnhunt/SKILL.md",
       "find": "If it is NOT Opus 4.7 or higher,\n**STOP immediately** and tell the user (do not run any tools, resolve the target,\nor offer the mode menu yet):\n\n> ⚠️ VulnHunter is optimized for Claude Opus 4.7/4.8 and may be unreliable on other\n> models. Please switch with the `/model opus` command, then re-run `/vulnhunt`.\n\nWait for the user. Only proceed past this step once they are on Opus, or if they\nexplicitly reply that they want to continue on the current model anyway.",
-      "replace": "If it is not an Opus-class reasoning model, print this one-line notice, then\nCONTINUE immediately on the currently selected model (do not stop, do not ask\nthe user to switch, do not run any tools for this check):\n\n> ⚠️ Calibration note: VulnHunter's gates are tuned on Claude Opus-class\n> models. Detection quality on the selected model may differ — weigh results\n> accordingly.\n\nProceed directly to binding the scan metadata."
+      "replace": "If it is not an Opus-class reasoning model, print this one-line notice, then\nCONTINUE immediately on the currently selected model (do not stop, do not ask\nthe user to switch, do not run any tools for this check):\n\n> ⚠️ Calibration note: VulnHunter's gates are tuned on Claude Opus-class\n> models. Detection quality on the selected model may differ — weigh results\n> accordingly.\n\nProceed directly to binding the scan metadata.",
+      "count": 1
     },
     {
       "type": "substitute",
       "files": "vulnhunt/SKILL.md",
       "find": "(using Grep, Glob, and Read)",
-      "replace": "(using content search, filename search, and file reads)"
+      "replace": "(using content search, filename search, and file reads)",
+      "count": 1
     },
     {
       "type": "substitute",
       "files": "vulnhunt/SKILL.md",
       "find": "**Grep**, **Glob**, and **Read**",
-      "replace": "content search, filename search, and file reads"
+      "replace": "content search, filename search, and file reads",
+      "count": 1
     },
     {
       "type": "substitute",
       "files": "vulnhunt/SKILL.md",
       "find": "- **Agent (Explore)** — for broader codebase exploration when simple searches aren't enough.",
-      "replace": "- **delegate_task** — dispatch a subagent for broader codebase exploration when simple searches aren't enough."
+      "replace": "- **delegate_task** — dispatch a subagent for broader codebase exploration when simple searches aren't enough.",
+      "count": 1
     },
     {
       "type": "substitute",
       "files": "vulnhunt/SKILL.md",
       "find": "**After each phase completes, run `/cost` and report the result to the user.**",
-      "replace": "**After each phase completes, report one line of progress to the user.**"
+      "replace": "**After each phase completes, report one line of progress to the user.**",
+      "count": 1
     },
     {
       "type": "substitute",
@@ -65,13 +72,15 @@
       "type": "substitute",
       "files": "vulnhunt/SKILL.md",
       "find": "${CLAUDE_SKILL_DIR}",
-      "replace": "${HERMES_SKILL_DIR}"
+      "replace": "${HERMES_SKILL_DIR}",
+      "count": 1
     },
     {
       "type": "substitute",
       "files": "vulnhunt/SKILL.md",
       "find": "Verify subagent completion by checking output files exist (Glob)",
-      "replace": "Verify subagent completion by checking output files exist (filename search)"
+      "replace": "Verify subagent completion by checking output files exist (filename search)",
+      "count": 1
     }
   ]
 }

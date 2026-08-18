@@ -24,7 +24,7 @@ Transform types (applied in order; see `scripts/render_skills.py`):
 
 | type | effect |
 |---|---|
-| `substitute` | literal find/replace on files matching `files` glob. Fails the render when `find` is absent unless `optional: true`; `count: N` pins the expected occurrence count. |
+| `substitute` | literal find/replace on files matching `files` glob. Fails the render when `find` is absent unless `optional: true`. **`count: N` is required on every non-optional substitute** (enforced by `tests/test_render_skills.py`): it pins the expected occurrence total so a source edit that duplicates or half-rewords a phrase trips the drift test instead of silently rewriting the wrong number of sites. |
 | `prepend` | insert text (or `text_file`) after the YAML frontmatter |
 | `frontmatter_append` | insert lines before the closing `---` |
 | `override` | replace/create a file wholesale from the adapter dir |
@@ -54,8 +54,12 @@ adapters are the reference — crib from them):
       test asserting your key substitutions and overlay presence
 - [ ] `vulnhunter-agent/agent/engines/` — add an engine module if the
       harness has a CLI; register it in `engines/__init__.py`
-      (`ENGINE_NAMES` + `get_engine`), follow `HermesEngine` for the
-      subprocess + pre-staging + audit pattern, add tests
+      (`ENGINE_NAMES` + `get_engine`). If it shells out to a CLI, subclass
+      `SubprocessEngine` (`engines/_subprocess.py`) and implement only the
+      hooks (`_binary_name`, `_install_target`, `_binary_hint`,
+      `_skill_paths`, `_build_command`, `_build_kickoff`) — the shared base
+      supplies pre-staging, audit, timeout, and the contents-based success
+      contract. Add the engine to the parametrized contract tests.
 - [ ] `harness/local_harness/config.py` — add an `ENGINES` entry
 - [ ] `harness/local_harness/scan.py` / `benchmark/judge.py` — add argv
       builders + tests
@@ -68,8 +72,9 @@ adapters are the reference — crib from them):
 
 1. `dist/claude-code` stays byte-identical to the repo-root skill sources
    (enforced by tests) — the Claude path must not regress.
-2. Success is judged by the results contract (`*_VULNHUNT_RESULTS_*` dir +
-   `scan_manifest.json`), never by engine stdout.
+2. Success is judged by the results contract — a `*_VULNHUNT_RESULTS_*`
+   dir that actually contains the skill's `README.md` report — never by
+   engine stdout or by the pre-created directory merely existing.
 3. The kickoff prompt always carries the "Pre-resolved scan metadata"
    block (results dir, branch label, repo URL, model tag, shell policy).
 4. Read-only runs must not enable arbitrary code execution; exploit-test

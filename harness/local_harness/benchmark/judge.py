@@ -5,8 +5,8 @@ import os
 import subprocess
 import time
 
+from local_harness import config
 from local_harness.config import (
-    JUDGE_ENGINE,
     JUDGE_MAX_RETRIES,
     JUDGE_RETRY_BACKOFF_MULTIPLIER,
     JUDGE_RETRY_INITIAL_BACKOFF,
@@ -60,7 +60,7 @@ def build_judge_command(prompt, system_prompt, model, engine=None):
     claude-code replicates the historical argv exactly. Engines without a
     --system-prompt flag carry the system prompt inside the prompt text.
     """
-    engine = engine or JUDGE_ENGINE
+    engine = engine or config.JUDGE_ENGINE
     if engine == "claude-code":
         return [
             "claude", "-p", prompt,
