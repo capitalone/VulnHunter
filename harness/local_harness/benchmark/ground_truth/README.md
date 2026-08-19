@@ -28,7 +28,7 @@ Each file is a JSON array of finding objects:
 
 | Field | Meaning |
 |-------|---------|
-| `finding_id` | Unique label for this finding. Any stable string works; the `VULN-NNN` scheme mirrors the IDs `/vulnhunt` emits in its report. |
+| `finding_id` | Stable identifier, **globally unique across the entire corpus** (not just within one file). The benchmark keys judgments and history by this ID, so collisions across files silently corrupt results. Convention: prefix with the app name (e.g. `NODEGOAT-001`, `JUICE-002`) to guarantee uniqueness. |
 | `type` | Vulnerability class (free-form label used in the per-type scorecard). |
 | `source_code` | `https://github.com/{org}/{repo}/tree/{commit_hash}` — the benchmark clones the repo at exactly this commit (`git fetch --depth=1 origin <hash>`, full-clone fallback). |
 | `description` | The detail the judge compares the scanner's findings against. Be specific. |

@@ -64,6 +64,9 @@ def _validate_benchmarks(benchmarks):
             continue
         for i, finding in enumerate(findings):
             loc = f"{filename}[{i}]"
+            if not isinstance(finding, dict):
+                errors.append(f"{loc}: each entry must be a JSON object, got {type(finding).__name__}")
+                continue
             missing = _REQUIRED_FIELDS - set(finding.keys())
             if missing:
                 errors.append(f"{loc}: missing required fields: {', '.join(sorted(missing))}")
