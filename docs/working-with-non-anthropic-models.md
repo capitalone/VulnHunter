@@ -8,15 +8,17 @@ third-party models (GLM, Kimi, DeepSeek, Gemma, Nemotron, OpenAI's open models, 
 
 This doc explains **how** to do that and **which models actually work**.
 
-> TL;DR — in our evaluations as of 2026-07-28, the models we'd consider for a real scan
-> are **Claude Opus 5** and **Opus 4.8** (native), **GLM-5.2**, and — on a single strong
-> run — **Kimi K3** (the latter two via OpenRouter). Opus 5 found by far the most real
-> vulnerabilities in absolute terms, at by far the highest cost; GLM-5.2 and Kimi K3 led
-> on cost-effectiveness and, on the vulns all models were measured against, on
-> severity-weighted coverage. Opus produced the most polished and consistent reports. No
-> single run should be treated as complete. Other completed evaluations — including
-> **Qwen 3.7 Max** — were noisy, incomplete, or non-starters. OpenAI frontier models
-> have not yet completed the same evaluation.
+> TL;DR — in our evaluations as of 2026-08-20, the models we'd consider for a real scan
+> are **GLM-5.3**, **Claude Opus 5** and **Opus 4.8** (native), **GLM-5.2**, and — on a
+> single strong run — **Kimi K3** (the GLMs and Kimi via OpenRouter). **GLM-5.3 is the new
+> default recommendation for a serious single scan**: it lands within one finding of Opus 5
+> overall at half the cost, and it beats every model including Opus 5 when scored only on
+> the vulnerabilities the whole field was originally measured against. Opus 5 still finds
+> the most in absolute terms, at by far the highest cost, and produces the most polished
+> reports. Cheaper GLM-5.2 and Kimi K3 runs remain the best value per dollar. No single run
+> should be treated as complete. Other completed evaluations — including **Qwen 3.7 Max** —
+> were noisy, incomplete, or non-starters. OpenAI frontier models have not yet completed the
+> same evaluation.
 
 ---
 
@@ -31,7 +33,7 @@ The following shell commands follow OpenRouter's current
 export ANTHROPIC_BASE_URL="https://openrouter.ai/api"
 export ANTHROPIC_AUTH_TOKEN="$(<"$HOME/.openrouter/api_key")"
 export ANTHROPIC_API_KEY=""
-export ANTHROPIC_MODEL="z-ai/glm-5.2"          # <- the model under test
+export ANTHROPIC_MODEL="z-ai/glm-5.3"          # <- the model under test
 # ...other candidates commented out...
 export ANTHROPIC_DEFAULT_OPUS_MODEL="$ANTHROPIC_MODEL"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="$ANTHROPIC_MODEL"
@@ -119,9 +121,10 @@ run `claude` normally; `/vulnhunt` already gates itself to Opus-class models by 
 
 | Model | Access | Verdict |
 |---|---|---|
-| **Claude Opus 5** | native `claude` | **Recommended when breadth matters more than budget.** In one run it produced 32 adjudicated-real findings — more than double any other model — with 0.865 precision, no invalid citations, and the best recon/sweep/report stages we've scored. Most of that lead came from a large region of the codebase no other model searched; measured only on the vulnerabilities every model was scored against, it placed third. It cost **$110** (about 7× Kimi K3, and $3.44 per true positive — worse than Opus 4.8). Run it when you want maximum coverage in one pass and can absorb the cost. |
+| **GLM-5.3** | `z-ai/glm-5.3` (OpenRouter) | **Recommended as the default for a serious scan.** In one run it produced 31 adjudicated-real findings at 0.838 precision and **zero invalid citations** — within one finding of Opus 5 for **half the price ($54 vs $110, $1.74 per true positive)**. Scored only on the vulnerabilities the original six-model field was measured against, it placed **first, ahead of Opus 5** (14 true positives vs 10). It also independently rediscovered five vulnerabilities previously found by only one other model, and caught 2 of the 5 known High-severity issues. Caveats: it is slow (~7 h), it inflated severity on roughly half its true positives, and it still missed one High that GLM-5.2 catches. |
+| **Claude Opus 5** | native `claude` | **Recommended when breadth matters more than budget.** In one run it produced 32 adjudicated-real findings — more than double any other model — with 0.865 precision, no invalid citations, and the best recon/sweep/report stages we've scored. Most of that lead came from a large region of the codebase no other model searched; measured only on the vulnerabilities every model was scored against, it placed third. It cost **$110** (about 7× Kimi K3, twice GLM-5.3, and $3.44 per true positive — worse than both). Run it when you want maximum coverage in one pass and can absorb the cost; note that Opus 5 and GLM-5.3 are highly complementary — together they cover 73% of the answer key, more than any other pairing. |
 | **Claude Opus 4.8** | native `claude` | **Recommended for report quality and consistency.** Reliably completed the pipeline and produced the most polished reports. Its main weakness was recon coverage: both evaluated runs missed some of the most severe findings. It was also the most expensive option. |
-| **GLM-5.2** | `z-ai/glm-5.2` (OpenRouter) | **Recommended for severity-weighted coverage and value.** It produced the strongest severe-vulnerability coverage at substantially lower cost than Opus, with generally strong precision. Run-to-run variance is the main caveat. |
+| **GLM-5.2** | `z-ai/glm-5.2` (OpenRouter) | **Recommended for value, and still worth running alongside 5.3.** It produced strong severe-vulnerability coverage at $10–14 per run with generally strong precision. GLM-5.3 outscores it on almost every axis, but does **not** subsume it — the 5.2 runs still hold eight vulnerabilities 5.3 missed, including one High. Run-to-run variance is the main caveat, and the reason three cheap 5.2 runs are a credible alternative to one 5.3 run. |
 | **Kimi K3** | `moonshotai/kimi-k3` (OpenRouter) | **Recommended, on a single run.** In one evaluation it led the field on true-positive count and cost-effectiveness with strong precision, and it **uniquely discovered two exploitable High-severity vulnerabilities no other model found** (a token path-prefix bypass and an ambient-credential clone). Caveats: only one run so far; it was slow (~5.5 h); and its severe-vuln credit came from findings it discovered rather than the previously-known set. A clear generational jump over Kimi k2.7-code (below) — do not confuse the two. |
 
 **Caveat on GLM (and any single run):** finding overlap between runs was low. The most
@@ -129,7 +132,11 @@ severe issue appeared consistently, but the secondary findings changed substanti
 The sample is too small to call that behavior reliable. For thoroughness, **run it 2–3
 times and union the results**. In our evaluation, repeated GLM runs still compared
 favorably with a single Opus 4.8 run on both cost and severe-vulnerability coverage — and
-two or three of them still cost less than half of one Opus 5 run.
+three GLM-5.2 runs cost less than three quarters of one GLM-5.3 run, or a third of one
+Opus 5 run. The cheapest combination we have found that covers **every** known
+High-severity vulnerability is a single Kimi K3 run plus the one GLM-5.2 run that caught
+all three of the Highs GLM finds — about **$29** together, though that pair covers only
+20 of the 71 known vulnerabilities overall.
 
 These recommendations come from a limited evaluation, not a general model benchmark.
 Opus agents also participated in adjudicating the results while Opus was one of the
