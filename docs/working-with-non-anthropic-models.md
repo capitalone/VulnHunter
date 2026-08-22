@@ -8,19 +8,20 @@ third-party models (GLM, Kimi, DeepSeek, Gemma, Nemotron, OpenAI's open models, 
 
 This doc explains **how** to do that and **which models actually work**.
 
-> TL;DR — in our evaluations as of 2026-08-21, the models we'd consider for a real scan
+> TL;DR — in our evaluations as of 2026-08-22, the models we'd consider for a real scan
 > are **Claude Opus 5** and **Opus 4.8** (native), **GLM-5.3**, **GLM-5.2**, and — on a
 > single strong run — **Kimi K3** (the GLMs and Kimi via OpenRouter). **Opus 5 finds the most
-> by a wide margin when it runs well**: its second evaluated run was the first to catch every
-> known High-severity vulnerability and it leads on every answer key, including the
-> vulnerabilities the whole field was originally measured against. But it is the most
-> expensive option *and* the least consistent — two Opus 5 runs on identical code overlapped
-> only 41%, and the stronger one cost $203. **GLM-5.3 remains the best single-scan value**,
-> at roughly 2.4× Opus 5's severity-weighted coverage per dollar. Cheaper GLM-5.2 and Kimi K3
-> runs are still the best raw value per dollar. **No single run should be treated as
-> complete** — that now applies most strongly to Opus 5. Other completed evaluations —
-> including **Qwen 3.7 Max** — were noisy, incomplete, or non-starters. OpenAI frontier
-> models have not yet completed the same evaluation.
+> when it runs well**: its stronger run was the first to catch every known High-severity
+> vulnerability and it leads on every answer key. **GLM-5.3 is the best value by a wide
+> margin** — its stronger run found 37 real vulnerabilities and 4 of the 5 Highs for **$43**,
+> the best cost-per-finding of any run we have scored. The dominant caveat is now
+> **consistency**: every model we have run twice disagreed with itself badly — GLM-5.3
+> overlapped **31%** run-to-run, Opus 5 **41%**, GLM-5.2 **46%**. **No single run should be
+> treated as complete**, and unioning two cheap runs beats one expensive run per dollar
+> spent: two GLM-5.3 runs found 52 real vulnerabilities for $97, against 32 for $110 from a
+> weak Opus 5 run. Other completed evaluations — including **Qwen 3.7 Max** — were noisy,
+> incomplete, or non-starters. OpenAI frontier models have not yet completed the same
+> evaluation.
 
 ---
 
@@ -123,23 +124,33 @@ run `claude` normally; `/vulnhunt` already gates itself to Opus-class models by 
 
 | Model | Access | Verdict |
 |---|---|---|
-| **Claude Opus 5** | native `claude` | **Recommended when coverage matters more than budget or predictability.** Its stronger run found 67 adjudicated-real vulnerabilities — more than double any non-Opus run — and was the **first run ever to catch all five known High-severity issues**, leading on every answer key including the original one. That run cost **$203** ($3.03 per true positive). Two serious caveats: **consistency** — two runs on identical code shared only 41% of their findings, with the weaker run finding half as much for $110 — and **noise**: 16 false positives (the most of any run), 11 of them arguments that VulnHunter's own gates are weak rather than actual vulnerabilities, plus only 4 of its 16 "High" calls surviving adjudication. Budget for two runs or accept the variance. |
-| **GLM-5.3** | `z-ai/glm-5.3` (OpenRouter) | **Recommended as the best value for a serious scan.** In one run it produced 31 adjudicated-real findings at 0.838 precision and **zero invalid citations**, for **$54 ($1.74 per true positive)** — matching Opus 5's weaker run at half its price, and delivering **2.4× more severity-weighted coverage per dollar than Opus 5's stronger run**. It also independently rediscovered five vulnerabilities previously found by only one other model. Opus 5 outfinds it outright when it runs well; GLM-5.3 buys more coverage per dollar and has so far behaved more predictably. Caveats: only one run so far, it is slow (~7 h), it inflated severity on roughly half its true positives, it caught only 2 of the 5 known Highs, and it missed one High that GLM-5.2 catches. |
+| **Claude Opus 5** | native `claude` | **Recommended when coverage matters more than budget or predictability.** Its stronger run found 67 adjudicated-real vulnerabilities — more than double any non-Opus run — and was the **first run ever to catch all five known High-severity issues**, leading on every answer key including the original one. That run cost **$203** ($3.03 per true positive — roughly 2.6× GLM-5.3's best run). Two serious caveats: **consistency** — two runs on identical code shared only 41% of their findings, with the weaker run finding half as much for $110 — and **noise**: 16 false positives (the most of any run), 11 of them arguments that VulnHunter's own gates are weak rather than actual vulnerabilities, plus only 4 of its 16 "High" calls surviving adjudication. Choose it when you need maximum single-run coverage and can absorb both the price and the variance. |
+| **GLM-5.3** | `z-ai/glm-5.3` (OpenRouter) | **Recommended as the best value for a serious scan, and the best value overall.** Across two runs it produced 31 and 37 adjudicated-real findings at ~0.82 precision with **zero invalid citations**. The stronger run cost **$43** — **$1.17 per true positive and 0.855 findings per dollar, the best figures in the entire corpus** — caught **4 of the 5 known Highs**, and showed the best severity discipline of any high-yield run (only 4 findings called High, half of which held; Opus 5's stronger run called 16 High and kept 4). It delivers **2.7× Opus 5's severity-weighted coverage per dollar**. Caveats: it is slow (~6–7 h), and it is the **least self-consistent model measured** — its two runs shared only 31% of their findings, so treat one run as a sample, not a scan. Both runs missed the same High (the symlink `copytree` disclosure), which looks like a genuine blind spot rather than variance. |
 | **Claude Opus 4.8** | native `claude` | **Recommended for report quality and consistency.** Reliably completed the pipeline and produced the most polished reports. Its main weakness was recon coverage: both evaluated runs missed some of the most severe findings, and neither caught a single High-severity issue. At $28 it is mid-priced — Opus 5 is now the expensive option. |
 | **GLM-5.2** | `z-ai/glm-5.2` (OpenRouter) | **Recommended for value, and still worth running alongside 5.3.** It produced strong severe-vulnerability coverage at $10–14 per run with generally strong precision. GLM-5.3 outscores it on almost every axis, but does **not** subsume it — the 5.2 runs still hold eight vulnerabilities 5.3 missed, including one High. Run-to-run variance is the main caveat, and the reason three cheap 5.2 runs are a credible alternative to one 5.3 run. |
 | **Kimi K3** | `moonshotai/kimi-k3` (OpenRouter) | **Recommended, on a single run.** In one evaluation it led the field on true-positive count and cost-effectiveness with strong precision, and it **uniquely discovered two exploitable High-severity vulnerabilities no other model found** (a token path-prefix bypass and an ambient-credential clone). Caveats: only one run so far; it was slow (~5.5 h); and its severe-vuln credit came from findings it discovered rather than the previously-known set. A clear generational jump over Kimi k2.7-code (below) — do not confuse the two. |
 
-**Caveat on any single run — including Opus 5:** run-to-run overlap is low for every model
-we have measured twice. Two GLM-5.2 runs shared 46% of their findings; **two Opus 5 runs
-shared only 41%**, with one finding 67 real vulnerabilities and the other 32 on identical
-code. The most severe issues recur; the secondary findings change substantially. For
-thoroughness, **run 2–3 times and union the results** — and prefer unioning *different*
-models over repeating one. The best coverage we have measured is one Opus 5 run plus one
-GLM-5.3 run: **83% of the known vulnerabilities for $257**, better *and* cheaper than two
-Opus 5 runs (71% for $313). At the other end, the cheapest combination covering **every**
-known High-severity vulnerability is a single Kimi K3 run plus the one GLM-5.2 run that
-caught all three of the Highs GLM finds — about **$29** together, though that pair reaches
-only 19 of the 99 known vulnerabilities overall.
+**Caveat on any single run — this is the most important finding in the evaluation:**
+every model we have run more than once disagreed with itself badly. Measured overlap
+between two runs of the same model: **GLM-5.3 31%**, **Opus 5 41%**, **GLM-5.2 46%**. Opus 5
+found 67 real vulnerabilities on one run and 32 on another; GLM-5.3 found 37 and 31 with only
+16 in common. The most severe issues tend to recur; the secondary findings change
+substantially. So: **run 2–3 times and union the results**, and prefer unioning *different*
+models over repeating one.
+
+Measured combinations on the current 104-vulnerability key:
+
+| Combination | Reals found | Cost |
+|---|--:|--:|
+| Opus 5 + GLM-5.3 ×2 | 89/104 | $300 |
+| Opus 5 + GLM-5.3 + Kimi K3 | 87/104 | $273 |
+| Opus 5 (best single run) | 67/104 | $203 |
+| GLM-5.3 ×2 | 52/104 | $97 |
+| GLM-5.3 + GLM-5.2 ×2 | 46/104 | $67 |
+
+The cheapest combination covering **every** known High-severity vulnerability is a single
+Kimi K3 run plus the one GLM-5.2 run that caught all three of the Highs GLM finds — about
+**$29** together, though that pair reaches only 19 of the 104 known vulnerabilities overall.
 
 These recommendations come from a limited evaluation, not a general model benchmark.
 Opus agents also participated in adjudicating the results while Opus was one of the
