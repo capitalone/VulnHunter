@@ -1,11 +1,11 @@
-"""Shared base for the subprocess-driven scan engines (hermes/copilot/codex).
+"""Shared base for subprocess-driven scan engines.
 
-Each of those engines drives /vulnhunt by shelling out to an agent CLI and
-judging success by the VulnHunter results contract. The orchestration is
-identical across all three — skill check, binary check, prior-results
-guard, results-dir staging, git context, audit start, prompt/command
-build, subprocess launch with timeout, and the completion contract — so it
-lives here once. A concrete engine supplies only what actually differs:
+Hermes currently uses this base to drive /vulnhunt by shelling out to its
+CLI and judging success by the VulnHunter results contract. The generic
+orchestration — skill check, binary check, prior-results guard, results-dir
+staging, git context, audit start, prompt/command build, subprocess launch
+with timeout, and the completion contract — lives here once so future
+CLI-backed harnesses only supply what actually differs:
 
   - ``name``                class attribute, the ``[scan] engine`` value;
   - ``_binary_name``        PATH lookup name (``"hermes"`` etc.);

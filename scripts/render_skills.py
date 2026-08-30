@@ -51,19 +51,40 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ALL_SKILLS = ("vulnhunt", "vulnhunt-fix-verify", "vulnhunter-fix")
-COPY_IGNORE = shutil.ignore_patterns(".installed-from", ".venv", "__pycache__", "*.pyc")
+COPY_IGNORE = shutil.ignore_patterns(
+    ".installed-from",
+    ".venv",
+    "__pycache__",
+    "*.pyc",
+    "*.egg-info",
+    ".pytest_cache",
+    ".hypothesis",
+    ".coverage",
+    ".coverage.*",
+    "coverage.xml",
+    "pytest-report.xml",
+)
 
 
 def is_ignored(path: Path) -> bool:
-    """True when ``path`` matches a COPY_IGNORE pattern.
+    """True when ``path`` or one of its parent directories is ignored.
 
     ``shutil.ignore_patterns`` returns a callable expecting
     ``(dir, names_iterable)`` and returning the set of ignored names — it
     must be given an iterable, never a bare str (which it would iterate
-    character-by-character, matching nothing). Centralizing the call here
-    keeps the correct shape in one place for both the renderer and tests.
+    character-by-character, matching nothing). Because ``render_adapter``
+    walks with ``rglob``, checking only the leaf would still copy ordinary
+    files below an ignored directory (for example ``.venv/bin/activate``).
+    Check every path component so ignored trees are excluded completely.
+    Centralizing the call here keeps the correct shape in one place for both
+    the renderer and tests.
     """
-    return path.name in COPY_IGNORE(str(path.parent), [path.name])
+    for candidate in (path, *path.parents):
+        if candidate.name in COPY_IGNORE(
+            str(candidate.parent), [candidate.name]
+        ):
+            return True
+    return False
 
 
 class TransformError(Exception):

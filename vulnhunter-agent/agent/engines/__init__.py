@@ -1,8 +1,9 @@
 """Pluggable scan engines for the vulnhunter-agent runtime.
 
 An *engine* is the agent harness that actually drives the /vulnhunt skill
-against a clone: the Claude Agent SDK (reference), the Hermes CLI, the
-GitHub Copilot CLI, ... All engines share one contract:
+against a clone: currently the Claude Agent SDK (reference) or the Hermes
+CLI. The protocol remains open to future engine modules. All engines share
+one contract:
 
   - success is judged by the VulnHunter results contract — a
     ``*_VULNHUNT_RESULTS_*`` directory that actually contains the skill's
@@ -17,13 +18,14 @@ GitHub Copilot CLI, ... All engines share one contract:
   - downstream stages (manifest, publish, issues, audit, verify) are
     engine-agnostic and consume only the results contract.
 
-Select via ``[scan] engine = "claude-code" | "hermes" | "copilot" |
-"codex"`` in the agent TOML (default ``claude-code`` — the existing SDK
-path, unchanged).
+Select via ``[scan] engine = "claude-code" | "hermes"`` in the agent TOML
+(default ``claude-code`` — the existing SDK path, unchanged).
 
-The three subprocess engines (hermes/copilot/codex) share a single
-``SubprocessEngine`` base (``agent/engines/_subprocess.py``); each concrete
-engine only declares its binary name, skill path, argv, and kickoff prompt.
+CLI-backed engines subclass ``SubprocessEngine``
+(``agent/engines/_subprocess.py``); each concrete engine only declares its
+binary name, skill path, argv, and kickoff prompt. Adding another harness
+therefore does not require duplicating process, audit, timeout, or results
+contract handling.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ if TYPE_CHECKING:
     from agent.audit import AuditWriter
     from agent.config import AgentConfig
 
-ENGINE_NAMES = ("claude-code", "hermes", "copilot", "codex")
+ENGINE_NAMES = ("claude-code", "hermes")
 
 
 class EngineError(RuntimeError):
@@ -99,14 +101,7 @@ def get_engine(config: "AgentConfig") -> ScanEngine:
         from agent.engines.hermes import HermesEngine
 
         return HermesEngine()
-    if name == "copilot":
-        from agent.engines.copilot import CopilotCliEngine
 
-        return CopilotCliEngine()
-    if name == "codex":
-        from agent.engines.codex import CodexEngine
-
-        return CodexEngine()
     raise ValueError(
         f"unknown scan engine {name!r} (supported: {', '.join(ENGINE_NAMES)}); "
         "set [scan] engine in the agent TOML"

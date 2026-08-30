@@ -207,21 +207,6 @@ def build_scan_command(folder_path, prompt, engine=None, readonly=False):
             "-m", MODEL,
             "-q", prompt,
         ]
-    if engine == "copilot":
-        # Experimental: verify the flag surface with `copilot -h` /
-        # `copilot help permissions` before benchmarking.
-        return ["copilot", "-p", prompt]
-    if engine == "codex":
-        # workspace-write even for read-only scans: the skill must write its
-        # results dir; read-only is enforced by the prompt, mirroring the
-        # claude-code acceptEdits policy. Flags verified on codex-cli 0.147.0.
-        return [
-            "codex", "exec",
-            "-C", folder_path,
-            "-s", "workspace-write",
-            "-m", MODEL,
-            prompt,
-        ]
     raise ValueError(f"unknown engine {engine!r}")
 
 

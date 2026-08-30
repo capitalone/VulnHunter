@@ -121,8 +121,8 @@ class ScanConfig:
     # Default covers loopback + private ranges; add your own internal zones.
     no_proxy: str = "localhost,127.0.0.1,169.254.169.254,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     # Which agent harness drives the scan. "claude-code" is the existing
-    # Claude Agent SDK path (unchanged); "hermes"/"copilot" shell out to the
-    # respective CLI with the same results-directory contract. See
+    # Claude Agent SDK path (unchanged); "hermes" shells out to its CLI with
+    # the same results-directory contract. Future CLI engines can reuse
     # agent/engines/.
     engine: str = "claude-code"
     # Override for the engine binary path (default: $PATH lookup).
@@ -132,10 +132,9 @@ class ScanConfig:
     engine_provider: str = ""
     # Hard cap for one engine-driven scan, seconds (CLI engines only).
     engine_timeout_seconds: int = 21_600
-    # Extra CLI flags appended to the engine invocation (e.g. Copilot
-    # ``--allow-tool`` patterns). Give a native TOML list —
-    # ``["--allow-tool", "shell(ls,cat)"]`` — so args with commas, spaces,
-    # or parens survive intact; a bare string is shlex-split as a fallback.
+    # Extra CLI flags appended to the selected engine invocation. Give a
+    # native TOML list so args with commas, spaces, or parens
+    # survive intact; a bare string is shlex-split as a fallback.
     engine_extra_args: list[str] = field(default_factory=list)
 
 
@@ -434,8 +433,8 @@ def _parse_engine_extra_args(raw: Any) -> list[str]:
 
     A native TOML list (``["--allow-tool", "shell(ls,cat)"]``) is the
     canonical form and is passed through verbatim — this preserves args
-    that contain commas, spaces, or parentheses, exactly the Copilot
-    ``--allow-tool shell(ls,cat)`` case a naive comma split would shred.
+    that contain commas, spaces, or parentheses; a naive comma split would
+    shred such values.
 
     A bare string (e.g. from an env override, which can't express a list)
     is tokenized with ``shlex.split`` so quoting works the way a shell

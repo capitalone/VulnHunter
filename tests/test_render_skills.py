@@ -105,6 +105,11 @@ class TestCopyIgnore(unittest.TestCase):
         self.assertTrue(render_skills.is_ignored(Path("/x/__pycache__")))
         self.assertTrue(render_skills.is_ignored(Path("/x/junk.pyc")))
         self.assertTrue(render_skills.is_ignored(Path("/x/.venv")))
+        self.assertTrue(render_skills.is_ignored(Path("/x/.venv/bin/activate.bat")))
+        self.assertTrue(render_skills.is_ignored(Path("/x/__pycache__/cache.data")))
+        self.assertTrue(render_skills.is_ignored(Path("/x/pkg.egg-info/SOURCES.txt")))
+        self.assertTrue(render_skills.is_ignored(Path("/x/.pytest_cache/README.md")))
+        self.assertTrue(render_skills.is_ignored(Path("/x/.coverage.worker.1")))
         self.assertTrue(render_skills.is_ignored(Path("/x/.installed-from")))
         self.assertFalse(render_skills.is_ignored(Path("/x/SKILL.md")))
         self.assertFalse(render_skills.is_ignored(Path("/x/phase1.md")))
@@ -120,6 +125,9 @@ class TestCopyIgnore(unittest.TestCase):
             junk_dir = skill_src / "__pycache__"
             junk_dir.mkdir()
             (junk_dir / "junk.pyc").write_text("bytecode")
+            venv_bin = skill_src / ".venv" / "bin"
+            venv_bin.mkdir(parents=True)
+            (venv_bin / "activate").write_text("venv helper")
             # A one-skill adapter manifest (identity transform).
             adapter_dir = root / "adapters" / "probe"
             adapter_dir.mkdir(parents=True)
@@ -129,12 +137,29 @@ class TestCopyIgnore(unittest.TestCase):
             out = root / "dist"
             render_skills.render_adapter(adapter_dir, root, out)
             rendered = out / "probe"
-            leaked = [p for p in rendered.rglob("*") if p.suffix == ".pyc" or p.name == "__pycache__"]
+            leaked = [
+                p for p in rendered.rglob("*")
+                if p.suffix == ".pyc"
+                or "__pycache__" in p.parts
+                or ".venv" in p.parts
+            ]
             self.assertEqual(leaked, [], f"detritus leaked into render: {leaked}")
             self.assertTrue((rendered / "vulnhunt" / "SKILL.md").is_file())
 
 
 class TestAdapterManifests(unittest.TestCase):
+    def test_shipped_adapters_are_claude_code_and_hermes(self):
+        """Keep the shipped surface narrow without closing the renderer.
+
+        New harnesses still plug in through adapters/<name>/adapter.json,
+        but each one must arrive as its own reviewed contribution rather
+        than shipping an unvalidated placeholder in this PR.
+        """
+        shipped = sorted(
+            p.name for p in ADAPTERS.iterdir() if (p / "adapter.json").is_file()
+        )
+        self.assertEqual(shipped, ["claude-code", "hermes"])
+
     def test_manifests_well_formed(self):
         for adapter_dir in sorted(ADAPTERS.iterdir()):
             if not (adapter_dir / "adapter.json").is_file():
@@ -261,7 +286,7 @@ class TestModelGateSoftened(unittest.TestCase):
     render keeps upstream's interactive STOP gate, byte-identical.)"""
 
     def test_gate_is_notice_not_stop(self):
-        for adapter in ("hermes", "codex", "copilot"):
+        for adapter in ("hermes",):
             dist = render_to_tmp(adapter)
             text = (dist / "vulnhunt" / "SKILL.md").read_text(encoding="utf-8")
             self.assertNotIn(

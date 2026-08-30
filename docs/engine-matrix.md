@@ -7,32 +7,32 @@ supported agent harness so adapter authors know what they are targeting.
 Status legend: ✅ verified locally, 📖 documented (not verified locally),
 ❌ absent, ⬜ planned/unknown (verify before relying on it).
 
-| Capability | Claude Code (reference) | Hermes | GitHub Copilot CLI | Codex CLI |
-|---|---|---|---|---|
-| Skill / prompt file format | `SKILL.md` (frontmatter: name, description) in `~/.claude/skills/` | `SKILL.md` (same frontmatter + `metadata.hermes.*`, `required_environment_variables`) in `~/.hermes/skills/`; natively imports Claude skills via `hermes import-agent claude-code` 📖 | Custom instructions (`.github/copilot-instructions.md`, user/path-level files) 📖 | `SKILL.md` convention in `~/.codex/skills/` ✅ (dir exists on codex-cli 0.147.0; no CLI subcommand) |
-| Skill-dir template token | `${CLAUDE_SKILL_DIR}` | `${HERMES_SKILL_DIR}` 📖 | n/a (instructions are repo-relative) | n/a |
-| Slash-command invocation | `/vulnhunt` | `/<skill-name>` (every installed skill) 📖 | prompt files via `/` menu ⬜ | `/<prompt-name>` in TUI 📖 |
-| Headless one-shot | `claude -p --output-format stream-json` | `hermes chat -q "<prompt>" -Q` (stdout = final response, stderr = `session_id: <id>`, exit 0/1) ✅ | non-interactive prompt flag ⬜ (confirm `copilot -h` once installed) | `codex exec [-C <dir>] [-s read-only\|workspace-write\|danger-full-access] [-m <model>] [--json]` ✅ |
-| Preload skill headlessly | `--add-dir` skills dir + slash command in prompt | `-s/--skills <name>` ✅ | n/a — rely on instruction files | AGENTS.md discovered from cwd 📖 |
-| Parallel subagents | `Agent` tool (general-purpose subagents) | `delegate_task` tool (`delegation` toolset; batch `tasks[]`, `output_schema`) 📖 | `/fleet` parallel subagents, `/delegate` cloud agent 📖 | none — use process-level fan-out 📖 |
-| File search tools | `Grep` / `Glob` / `Read` | `search_files` / `read_file` (file toolset) 📖 | built-in search + shell 📖 | shell (`rg`, `find`) 📖 |
-| Shell execution | `Bash` tool | `terminal` toolset (local/docker/ssh/modal/…) 📖 | shell with approval patterns (`shell(git:*)`) 📖 | sandboxed shell (`--sandbox workspace-write` etc.) 📖 |
-| Permission model | `--permission-mode` (`acceptEdits`, …), `--allowedTools` | approval modes `manual|smart|off`, `--yolo`, `command_allowlist`, `DANGEROUS_PATTERNS` 📖 | `--allow-tool` / `--deny-tool` patterns, per-session approvals 📖 | `--sandbox read-only|workspace-write|danger-full-access` 📖 |
-| Extra working dirs | `--add-dir` (repeatable) | session cwd; worktrees via `-w` ⬜ | `/add-dir` 📖 | `--add-dir`-equivalent via cwd ⬜ |
-| Model selection | `--model claude-opus-4-…` | `-m <model> --provider <p>`; providers: anthropic, openai-codex, copilot (GITHUB_TOKEN), gemini, openrouter, ollama/vllm (custom), … 📖 | `/model` (Auto, Claude Opus/Sonnet 4.5, GPT-5.2 Codex, org models) 📖 | `-m`, config model/providers 📖 |
-| Auth | `ANTHROPIC_API_KEY`, Bedrock OAuth/SigV4 | `~/.hermes/.env` per-provider keys 📖 | GitHub auth (`gh` / device flow) 📖 | `OPENAI_API_KEY` / ChatGPT auth 📖 |
-| Programmatic result contract | results dir + `scan_manifest.json` (ours, harness-neutral) | same contract — judge by artifact presence, not stdout ✅ | same | same |
+| Capability | Claude Code (reference) | Hermes |
+|---|---|---|
+| Skill / prompt file format | `SKILL.md` (frontmatter: name, description) in `~/.claude/skills/` | `SKILL.md` (same frontmatter + `metadata.hermes.*`, `required_environment_variables`) in `~/.hermes/skills/`; natively imports Claude skills via `hermes import-agent claude-code` 📖 |
+| Skill-dir template token | `${CLAUDE_SKILL_DIR}` | `${HERMES_SKILL_DIR}` 📖 |
+| Slash-command invocation | `/vulnhunt` | `/<skill-name>` (every installed skill) 📖 |
+| Headless one-shot | `claude -p --output-format stream-json` | `hermes chat -q "<prompt>" -Q` (stdout = final response, stderr = `session_id: <id>`, exit 0/1) ✅ |
+| Preload skill headlessly | `--add-dir` skills dir + slash command in prompt | `-s/--skills <name>` ✅ |
+| Parallel subagents | `Agent` tool (general-purpose subagents) | `delegate_task` tool (`delegation` toolset; batch `tasks[]`, `output_schema`) 📖 |
+| File search tools | `Grep` / `Glob` / `Read` | `search_files` / `read_file` (file toolset) 📖 |
+| Shell execution | `Bash` tool | `terminal` toolset (local/docker/ssh/modal/…) 📖 |
+| Permission model | `--permission-mode` (`acceptEdits`, …), `--allowedTools` | approval modes `manual|smart|off`, `--yolo`, `command_allowlist`, `DANGEROUS_PATTERNS` 📖 |
+| Extra working dirs | `--add-dir` (repeatable) | session cwd; worktrees via `-w` ⬜ |
+| Model selection | `--model claude-opus-4-…` | `-m <model> --provider <p>`; Hermes provider identifiers include `anthropic`, `openai-codex`, `copilot`, `gemini`, `openrouter`, and local OpenAI-compatible services (provider routing does not add another harness engine) 📖 |
+| Auth | `ANTHROPIC_API_KEY`, Bedrock OAuth/SigV4 | `~/.hermes/.env` per-provider keys 📖 |
+| Programmatic result contract | results dir + `scan_manifest.json` (ours, harness-neutral) | same contract — judge by artifact presence, not stdout ✅ |
 
-## Subprocess-engine limitations (hermes / copilot / codex)
+## Hermes subprocess-engine limitations
 
-The three subprocess engines (`agent/engines/`, sharing `SubprocessEngine`)
-differ from the Claude Agent SDK path in a few operator-visible ways:
+The Hermes engine subclasses the generic `SubprocessEngine` and differs from
+the Claude Agent SDK path in a few operator-visible ways:
 
 - **No cost/token totals.** The SDK path streams per-message usage into a
   `SessionTotals`; the subprocess engines accept the `totals_out` argument
   for protocol compatibility but cannot fill it (the CLIs don't expose
   structured per-turn usage over the headless contract). Cost/token totals
-  therefore report **zero** for non-Claude runs. Judge the scan by the
+  therefore report **zero** for Hermes runs. Judge the scan by the
   results contract, not by reported cost.
 - **Success is contents-based, not exit-code-based.** The engine pre-creates
   the `*_VULNHUNT_RESULTS_*` directory, so its existence proves nothing. A
@@ -45,8 +45,8 @@ differ from the Claude Agent SDK path in a few operator-visible ways:
   instantly". Set a large positive number for a long-but-bounded run.
 - **Timeout kill reaches the direct child only.** On timeout the engine
   `kill()`s the CLI process it spawned; any subagent/worker processes that
-  CLI itself launched (hermes `delegate_task`, codex sequential passes) are
-  not directly reaped and rely on the child's own shutdown.
+  CLI itself launched (`delegate_task` workers) are not directly reaped and
+  rely on the child's own shutdown.
 
 ## VulnHunter-side coupling inventory (audit date: 2026-08-16)
 
@@ -76,7 +76,6 @@ differ from the Claude Agent SDK path in a few operator-visible ways:
 
 - Hermes Agent v0.20.1 — `/home/mark/.local/bin/hermes`; skills at
   `~/.hermes/skills`; source with docs at `/home/mark/hermes-agent`.
-- codex-cli 0.147.0 — `/home/mark/.local/bin/codex`; `~/.codex` configured.
-- `claude`, `copilot` — not installed (rendering/tests do not require them;
-  smoke tests for those harnesses are documented commands to run where the
-  CLIs exist).
+- `claude` — not installed on the machine used for Hermes validation; the
+  Claude path is the existing reference implementation covered by its test
+  suite.

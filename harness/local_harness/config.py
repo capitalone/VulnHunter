@@ -52,14 +52,6 @@ ENGINES = {
         "binary": "hermes",
         "skills_dir": "~/.hermes/skills/vulnhunt",
     },
-    "copilot": {
-        "binary": "copilot",
-        "skills_dir": "~/.copilot/skills/vulnhunt",
-    },
-    "codex": {
-        "binary": "codex",
-        "skills_dir": "~/.codex/skills/vulnhunt",
-    },
 }
 
 

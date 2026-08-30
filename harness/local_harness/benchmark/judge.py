@@ -74,16 +74,6 @@ def build_judge_command(prompt, system_prompt, model, engine=None):
             "-m", model,
             "-q", f"{system_prompt}\n\n---\n\n{prompt}",
         ]
-    if engine == "copilot":
-        return ["copilot", "-p", f"{system_prompt}\n\n---\n\n{prompt}"]
-    if engine == "codex":
-        # Judge may run outside a git repo — skip the repo check.
-        return [
-            "codex", "exec",
-            "--skip-git-repo-check",
-            "-m", model,
-            f"{system_prompt}\n\n---\n\n{prompt}",
-        ]
     raise ValueError(f"unknown engine {engine!r}")
 
 

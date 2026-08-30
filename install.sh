@@ -11,7 +11,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Target harness. claude-code installs the repo-root skill sources verbatim
-# (identity); other targets are rendered by scripts/render_skills.py from
+# (identity); adapter targets are rendered by scripts/render_skills.py from
 # adapters/<target>/adapter.json into dist/<target>/ first.
 TARGET="claude-code"
 while [ $# -gt 0 ]; do
@@ -19,7 +19,7 @@ while [ $# -gt 0 ]; do
         --target) TARGET="${2:-}"; shift 2 ;;
         --target=*) TARGET="${1#*=}"; shift ;;
         -h|--help)
-            echo "usage: ./install.sh [--target claude-code|hermes|copilot|codex]"
+            echo "usage: ./install.sh [--target claude-code|hermes]"
             exit 0 ;;
         *)
             echo "error: unknown argument: $1" >&2
@@ -35,18 +35,8 @@ case "$TARGET" in
         echo "Rendering hermes skill bundle (dist/hermes)..."
         python3 "$SCRIPT_DIR/scripts/render_skills.py" --adapter hermes \
             || { echo "error: render_skills.py failed" >&2; exit 1; } ;;
-    copilot)
-        SKILLS_PARENT="$HOME/.copilot/skills"
-        echo "Rendering copilot skill bundle (dist/copilot)..."
-        python3 "$SCRIPT_DIR/scripts/render_skills.py" --adapter copilot \
-            || { echo "error: render_skills.py failed" >&2; exit 1; } ;;
-    codex)
-        SKILLS_PARENT="$HOME/.codex/skills"
-        echo "Rendering codex skill bundle (dist/codex)..."
-        python3 "$SCRIPT_DIR/scripts/render_skills.py" --adapter codex \
-            || { echo "error: render_skills.py failed" >&2; exit 1; } ;;
     *)
-        echo "error: unknown target '$TARGET' (supported: claude-code, hermes, copilot, codex)" >&2
+        echo "error: unknown target '$TARGET' (supported: claude-code, hermes)" >&2
         exit 1 ;;
 esac
 

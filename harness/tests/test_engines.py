@@ -38,18 +38,10 @@ class TestScanCommandBuilders:
         )
         assert argv[argv.index("-t") + 1] == "file,terminal,delegation"
 
-    def test_copilot_argv(self):
-        argv = scan.build_scan_command("/repos/app", "PROMPT", engine="copilot")
-        assert argv == ["copilot", "-p", "PROMPT"]
-
-    def test_codex_argv(self):
-        argv = scan.build_scan_command("/repos/app", "PROMPT", engine="codex")
-        assert argv[0] == "codex"
-        assert argv[1] == "exec"
-        assert argv[argv.index("-C") + 1] == "/repos/app"
-        assert argv[argv.index("-s") + 1] == "workspace-write"
-        assert argv[argv.index("-m") + 1] == config.MODEL
-        assert argv[-1] == "PROMPT"
+    @pytest.mark.parametrize("engine", ["copilot", "codex"])
+    def test_unshipped_engine_raises(self, engine):
+        with pytest.raises(ValueError, match="unknown engine"):
+            scan.build_scan_command("/repos/app", "PROMPT", engine=engine)
 
     def test_unknown_engine_raises(self):
         with pytest.raises(ValueError, match="unknown engine"):
@@ -73,17 +65,10 @@ class TestJudgeCommandBuilders:
         combined = argv[argv.index("-q") + 1]
         assert "SYS" in combined and "PROMPT" in combined
 
-    def test_copilot_judge_embeds_system_prompt(self):
-        argv = judge.build_judge_command("PROMPT", "SYS", "m", engine="copilot")
-        assert argv == ["copilot", "-p", "SYS\n\n---\n\nPROMPT"]
-
-    def test_codex_judge_skips_git_check(self):
-        argv = judge.build_judge_command("PROMPT", "SYS", "m", engine="codex")
-        assert argv[0] == "codex"
-        assert "--skip-git-repo-check" in argv
-        assert argv[argv.index("-m") + 1] == "m"
-        combined = argv[-1]
-        assert "SYS" in combined and "PROMPT" in combined
+    @pytest.mark.parametrize("engine", ["copilot", "codex"])
+    def test_unshipped_judge_engine_raises(self, engine):
+        with pytest.raises(ValueError, match="unknown engine"):
+            judge.build_judge_command("PROMPT", "SYS", "m", engine=engine)
 
     def test_unknown_judge_engine_raises(self):
         with pytest.raises(ValueError, match="unknown engine"):
@@ -129,8 +114,13 @@ class TestEngineConfig:
         importlib.reload(config)
 
     def test_validate_engine_accepts_known(self):
-        for name in ("claude-code", "hermes", "copilot", "codex"):
+        for name in ("claude-code", "hermes"):
             assert config.validate_engine(name) == name
+
+    @pytest.mark.parametrize("name", ["copilot", "codex"])
+    def test_validate_engine_rejects_unshipped(self, name):
+        with pytest.raises(ValueError, match="unknown harness engine"):
+            config.validate_engine(name)
 
     def test_skills_dir_for_validates(self):
         assert config.skills_dir_for("hermes").endswith(".hermes/skills/vulnhunt")

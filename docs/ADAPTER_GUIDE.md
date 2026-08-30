@@ -37,7 +37,7 @@ adapters are the reference — crib from them):
 
 - `${CLAUDE_SKILL_DIR}` → your harness's skill-dir token or absolute path
 - "Launch a `general-purpose` subagent:" ×4 → your subagent mechanism **or**
-  sequential self-execution (see `adapters/codex`)
+  a documented sequential strategy that preserves the minimum pass count
 - Phase-2 fan-out wording — keep the minimum pass count meaningful
 - `/cost` → a progress line; `/model opus` gating → a calibration notice
   that proceeds on the selected model (no model enforcement)

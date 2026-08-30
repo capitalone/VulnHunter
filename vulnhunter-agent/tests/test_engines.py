@@ -4,12 +4,11 @@ All subprocess execution is faked — these tests verify command
 construction, pre-staging (results dir, prior-results guard), the
 *contents-based* results-directory success contract (an empty results dir
 is a failure, not a clean scan), timeout handling, and config wiring. No
-real hermes / copilot / codex / claude invocation happens.
+real Hermes or Claude invocation happens.
 
-The three subprocess engines share ``SubprocessEngine``; the shared
-behaviors (success contract, non-zero exit, timeout, extra-args) are
-covered once, parametrized across all three, so no engine's copy can
-regress independently.
+Hermes exercises the generic ``SubprocessEngine`` behaviors (success
+contract, non-zero exit, timeout, and extra args) once. Future CLI-backed
+engines inherit that tested path rather than copying it.
 """
 
 from __future__ import annotations
@@ -24,8 +23,6 @@ from agent import engines
 from agent.engines import _subprocess as _subprocess_mod
 from agent.engines import ENGINE_NAMES, EngineError, ScanSpec, get_engine
 from agent.engines.claude_code import ClaudeCodeEngine
-from agent.engines.codex import CodexEngine
-from agent.engines.copilot import CopilotCliEngine
 from agent.engines.hermes import EngineError as HermesEngineError
 from agent.engines.hermes import HermesEngine
 
@@ -42,8 +39,6 @@ class TestGetEngine:
     @pytest.mark.parametrize("name,cls", [
         ("claude-code", ClaudeCodeEngine),
         ("hermes", HermesEngine),
-        ("copilot", CopilotCliEngine),
-        ("codex", CodexEngine),
     ])
     def test_returns_engine_for_known_names(self, name: str, cls: type) -> None:
         cfg = SimpleNamespace(scan=SimpleNamespace(engine=name))
@@ -57,7 +52,13 @@ class TestGetEngine:
             get_engine(cfg)
 
     def test_engine_names_cover_registry(self) -> None:
-        assert ENGINE_NAMES == ("claude-code", "hermes", "copilot", "codex")
+        assert ENGINE_NAMES == ("claude-code", "hermes")
+
+    @pytest.mark.parametrize("name", ["copilot", "codex"])
+    def test_unshipped_engine_raises(self, name: str) -> None:
+        cfg = SimpleNamespace(scan=SimpleNamespace(engine=name))
+        with pytest.raises(ValueError, match="unknown scan engine"):
+            get_engine(cfg)
 
     def test_engine_error_is_shared_symbol(self) -> None:
         # EngineError's home is engines/__init__; the hermes re-export must
@@ -120,7 +121,7 @@ engine_extra_args = ["--accept-hooks", "--reasoning=high"]
 
     def test_extra_args_string_is_shlex_split(self, tmp_path: Path) -> None:
         # A bare string is accepted for convenience and shlex-split, so a
-        # value with commas/parens survives intact (Copilot --allow-tool).
+        # future engine's value with commas/parens survives intact.
         from agent.config import load_config
 
         path = tmp_path / "cfg.toml"
@@ -128,13 +129,13 @@ engine_extra_args = ["--accept-hooks", "--reasoning=high"]
             self._toml(
                 """
 [scan]
-engine = "copilot"
-engine_extra_args = "--allow-tool 'shell(ls,cat)'"
+engine = "hermes"
+engine_extra_args = "--flag 'value,with(parens)'"
 """
             )
         )
         cfg = load_config(path)
-        assert cfg.scan.engine_extra_args == ["--allow-tool", "shell(ls,cat)"]
+        assert cfg.scan.engine_extra_args == ["--flag", "value,with(parens)"]
 
     def test_invalid_engine_rejected(self, tmp_path: Path) -> None:
         from agent.config import load_config
@@ -247,8 +248,6 @@ def _spec(
 _SUBPROC = _subprocess_mod
 _ENGINE_TABLE = [
     ("hermes", HermesEngine, "agent.engines.hermes._HERMES_SKILL_CANDIDATES", True),
-    ("copilot", CopilotCliEngine, "agent.engines.copilot._COPILOT_SKILL", False),
-    ("codex", CodexEngine, "agent.engines.codex._CODEX_SKILL", False),
 ]
 
 
@@ -260,7 +259,7 @@ def _install_skill(monkeypatch, tmp_path: Path, attr: str, as_tuple: bool) -> Pa
 
 
 # ---------------------------------------------------------------------------
-# Shared subprocess-engine contract (parametrized across all three)
+# Shared subprocess-engine contract (Hermes now; reusable by future engines)
 # ---------------------------------------------------------------------------
 
 
@@ -363,13 +362,13 @@ class TestSubprocessEngineContract:
         _install_skill(monkeypatch, tmp_path, skill_attr, as_tuple)
         captured: list = []
         monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", _capturing_exec(captured))
-        spec = _spec(tmp_path, name, engine_extra_args=["--allow-tool", "shell(ls,cat)"])
+        spec = _spec(tmp_path, name, engine_extra_args=["--flag", "value,with(parens)"])
         spec.clone_dir.mkdir(parents=True)
         await cls().run_scan(spec)
         cmd = list(captured[0][0])
         # The exact whitespace/parens of the arg survive as a single token.
-        assert "--allow-tool" in cmd
-        assert "shell(ls,cat)" in cmd
+        assert "--flag" in cmd
+        assert "value,with(parens)" in cmd
 
 
 class TestTimeoutDisabled:
@@ -444,50 +443,3 @@ class TestHermesCommand:
         assert cmd[cmd.index("-t") + 1] == "file,terminal,delegation"
         assert cmd[cmd.index("--provider") + 1] == "anthropic"
         assert "--reasoning=high" in cmd
-
-
-class TestCopilotCommand:
-    async def test_kickoff_points_at_skill_and_metadata(self, tmp_path, monkeypatch):
-        skill = tmp_path / "SKILL.md"
-        skill.write_text("# vulnhunt\n")
-        monkeypatch.setattr("agent.engines.copilot._COPILOT_SKILL", skill)
-        captured: list = []
-        monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", _capturing_exec(captured))
-        spec = _spec(tmp_path, "copilot", engine_extra_args=["--allow-tool", "write"])
-        spec.clone_dir.mkdir(parents=True)
-        results = await CopilotCliEngine().run_scan(spec)
-
-        cmd = captured[0][0]
-        assert cmd[0] == "/fake/copilot"
-        assert cmd[1] == "-p"
-        prompt = cmd[2]
-        assert str(skill) in prompt
-        assert "VULNHUNT_DIR" in prompt
-        assert "opus48" in prompt  # model tag derived
-        assert "--allow-tool" in cmd and "write" in cmd
-        assert results is not None and "_VULNHUNT_RESULTS_" in results.name
-
-
-class TestCodexCommand:
-    async def test_command_and_kickoff(self, tmp_path, monkeypatch):
-        skill = tmp_path / "SKILL.md"
-        skill.write_text("# vulnhunt\n")
-        monkeypatch.setattr("agent.engines.codex._CODEX_SKILL", skill)
-        captured: list = []
-        monkeypatch.setattr(_SUBPROC.asyncio, "create_subprocess_exec", _capturing_exec(captured))
-        spec = _spec(tmp_path, "codex", engine_extra_args=["--skip-git-repo-check"])
-        spec.clone_dir.mkdir(parents=True)
-        results = await CodexEngine().run_scan(spec)
-
-        cmd = captured[0][0]
-        assert cmd[0] == "/fake/codex"
-        assert cmd[1] == "exec"
-        assert cmd[cmd.index("-C") + 1] == str(spec.clone_dir)
-        assert cmd[cmd.index("-s") + 1] == "workspace-write"
-        assert cmd[cmd.index("-m") + 1] == "claude-opus-4-8"
-        assert "--skip-git-repo-check" in cmd
-        prompt = cmd[-1]
-        assert str(skill) in prompt
-        assert "VULNHUNT_DIR" in prompt
-        assert "read-only" in prompt
-        assert results is not None and "_VULNHUNT_RESULTS_" in results.name
