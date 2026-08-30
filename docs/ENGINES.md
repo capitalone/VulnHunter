@@ -10,6 +10,11 @@ future harnesses can be proposed and validated independently.
 | claude-code | `./install.sh` → `~/.claude/skills` | `claude -p '/vulnhunt …' --output-format stream-json` | reference (unchanged) |
 | hermes | `./install.sh --target hermes` → `~/.hermes/skills` | `hermes chat -Q -s vulnhunt -t file,terminal,delegation -q '/vulnhunt …'` | experimental (skill verified end-to-end; full-scan parity unbenchmarked) |
 
+See [`evidence/hermes-headless-validation.md`](evidence/hermes-headless-validation.md)
+for a sanitized, reproducible transcript from a real Hermes run against a
+synthetic repository, including install, skill discovery, headless exit, and
+the generated Phase 1 artifact.
+
 ## How it fits together
 
 Three layers, each independently extensible:

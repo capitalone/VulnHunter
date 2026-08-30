@@ -111,6 +111,8 @@ unchanged:
 
 See [docs/ENGINES.md](docs/ENGINES.md) for headless usage, engine selection
 in the runtime agent and benchmark harness, and Hermes validation status.
+Real-run evidence is recorded in
+[docs/evidence/hermes-headless-validation.md](docs/evidence/hermes-headless-validation.md).
 The renderer, engine protocol, and subprocess base remain deliberately
 modular; [docs/ADAPTER_GUIDE.md](docs/ADAPTER_GUIDE.md) describes how a future
 harness can be added as its own reviewed contribution. The Hermes adapter is
