@@ -16,8 +16,25 @@ Requires Python 3.12+ and an authenticated [Claude Code CLI](https://docs.claude
 on PATH — the harness shells out to `claude -p /vulnhunt ...` under the hood. It
 has no other runtime dependencies.
 
-Set the scanning/judging model once in `local_harness/config.py` (the `MODEL`
-constant) to switch models across every workflow.
+Set the scanning/judging model once in `local_harness/config.py` (the
+`DEFAULT_MODEL` constant) to switch models across every workflow, or override it
+for a single run without editing the file:
+
+```bash
+VULNHUNT_HARNESS_MODEL=<model-id> python -m local_harness.batch.run scan
+```
+
+The value is read once at import, so export it before the process starts; a
+blank value is treated as unset. Two things to know before reaching for it:
+
+- `/vulnhunt` is written for Opus-class models and stops with a warning on
+  anything lower (`vulnhunt/SKILL.md`, Step 0). A downgraded run is for
+  exercising the plumbing, not for producing detection numbers.
+- Scan artifacts are not tagged with the model that produced them, and both
+  resume paths skip any target that already has results. A cheap trial run will
+  therefore satisfy a later full run — use `--force-rescan` (benchmark) or a
+  fresh clone (batch) to actually re-scan. A benchmark trial also appends to
+  `finding_history.json`, which is what `--skip-stable` reads.
 
 ## What's inside
 
