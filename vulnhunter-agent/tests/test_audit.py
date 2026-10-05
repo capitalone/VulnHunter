@@ -14,6 +14,7 @@ from agent.audit import (
     AuditWriteError,
     AuditWriter,
     ULIDGenerator,
+    _clean,
     build_clean_scan_notified,
     build_finding_event,
     build_finding_opened,
@@ -203,24 +204,54 @@ class TestAuditWriter:
         for k, v in fields.items():
             assert obj[k] == v, k
 
-    def test_sensitive_key_non_string_values_recursed(self, tmp_path: Path) -> None:
-        # Only string values are masked by key; nested containers are still
-        # walked (and their own sensitive keys masked), empty strings and
-        # non-strings pass through unchanged.
+    def test_sensitive_key_non_string_values(self, tmp_path: Path) -> None:
+        # Under a sensitive key: dicts are walked (their own keys decide),
+        # list/tuple elements and bytes are masked, empty values and other
+        # scalars pass through so an unset secret still reads as unset.
         w = _writer(tmp_path)
         w.emit_audit(
             {
                 "event_id": "x",
                 "token": {"access_token": "SECRET-H", "expires_in": 3600},
+                "Set-Cookie": ["sid=SECRET-O; Path=/", "csrf=SECRET-P"],
+                "api_keys": ("SECRET-Q", {"note": "kept", "password": "SECRET-R"}),
+                "password": b"SECRET-S",
                 "client_secret": "",
                 "max_token": 5,
             }
         )
         w.close()
         obj = json.loads((tmp_path / "audit.jsonl").read_text())
+        assert "SECRET-" not in json.dumps(obj)
         assert obj["token"] == {"access_token": "***", "expires_in": 3600}
+        assert obj["Set-Cookie"] == ["***", "***"]
+        assert obj["api_keys"] == ["***", {"note": "kept", "password": "***"}]
+        assert obj["password"] == "***"
         assert obj["client_secret"] == ""
         assert obj["max_token"] == 5
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "credentials",
+            "client_credential",
+            "aws_secret_access_key",
+            "secret_access_key",
+            "access_key",
+            "private_key_pem",
+            "proxy-authorization",
+            "ssh_passphrase",
+            "secrets",
+            "passwords",
+            "api_keys",
+        ],
+    )
+    def test_extended_sensitive_key_shapes_masked(self, key: str) -> None:
+        assert _clean({key: "SECRET-T"}) == {key: "***"}
+
+    def test_non_string_key_not_treated_as_sensitive(self) -> None:
+        # Non-str keys can't name a credential; they must not crash the check.
+        assert _clean({1: "plain"}) == {1: "plain"}
 
     def test_stdout_mirror(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
