@@ -104,16 +104,72 @@ def _tail_lines(path, max_bytes=65536):
     return data.decode("utf-8", errors="replace").splitlines()
 
 
+RESULTS_MARKER = "_VULNHUNT_RESULTS_"
+
+
+def _is_link(path):
+    """True for a symlink, or (Windows, py3.12+) an NTFS junction.
+
+    os.path.islink does not report junctions, so a junction planted in a clone
+    on Windows would otherwise be treated as a real directory. On older Pythons
+    without os.path.isjunction, junctions remain undetected (documented gap).
+    """
+    if os.path.islink(path):
+        return True
+    isjunction = getattr(os.path, "isjunction", None)
+    return bool(isjunction and isjunction(path))
+
+
+def _is_git_tracked(clone_dir, entry):
+    """True if `entry` (relative to clone_dir) has files tracked by git.
+
+    A clone only contains tracked content, so a *_VULNHUNT_RESULTS_* dir that
+    git knows about was committed by the (untrusted) repo, not produced by our
+    scan. If git is unavailable or clone_dir isn't a work tree, return False
+    and fall back to the previous (untracked-assumed) behaviour.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "ls-files", "-z", "--", entry],
+            cwd=clone_dir, capture_output=True, timeout=30,
+        )
+    except Exception:  # git missing, timeout, or a stubbed subprocess layer
+        return False
+    return proc.returncode == 0 and bool(proc.stdout.strip(b"\0"))
+
+
+def _is_scan_results_dir(clone_dir, entry):
+    """True if clone_dir/entry looks like results produced by our own scan.
+
+    Rejects planted symlinks/junctions (isdir follows them, so a link to
+    another dir would be judged/collected/trusted) and dirs the repo committed
+    itself (which would make --resume skip the scan and ship a forged report).
+    """
+    if RESULTS_MARKER not in entry:
+        return False
+    full_path = os.path.join(clone_dir, entry)
+    if _is_link(full_path) or not os.path.isdir(full_path):
+        return False
+    return not _is_git_tracked(clone_dir, entry)
+
+
 def find_results_dir(clone_dir):
-    """Find the *_VULNHUNT_RESULTS_* directory inside a cloned repo."""
+    """Find the *_VULNHUNT_RESULTS_* directory our scan produced in a cloned repo.
+
+    Planted symlinks and repo-committed results dirs are skipped.
+    """
     if not os.path.isdir(clone_dir):
         return None
-    for entry in os.listdir(clone_dir):
-        if "_VULNHUNT_RESULTS_" in entry:
-            full_path = os.path.join(clone_dir, entry)
-            if os.path.isdir(full_path):
-                return full_path
+    for entry in sorted(os.listdir(clone_dir)):
+        if _is_scan_results_dir(clone_dir, entry):
+            return os.path.join(clone_dir, entry)
     return None
+
+
+def _is_valid_readme(results_dir):
+    readme = os.path.join(results_dir, "README.md")
+    # A symlinked README would have the judge/resume read an arbitrary host file.
+    return _is_regular_file(readme) and os.lstat(readme).st_size > 100
 
 
 def has_valid_results(clone_dir):
@@ -121,8 +177,7 @@ def has_valid_results(clone_dir):
     results_dir = find_results_dir(clone_dir)
     if not results_dir:
         return False
-    readme = os.path.join(results_dir, "README.md")
-    return os.path.isfile(readme) and os.path.getsize(readme) > 100
+    return _is_valid_readme(results_dir)
 
 
 def _remove_results_entry(path):
@@ -137,6 +192,9 @@ def _remove_results_entry(path):
     """
     if os.path.islink(path):
         os.unlink(path)
+    elif _is_link(path):
+        # NTFS junction (Windows): rmdir removes the junction, not its target.
+        os.rmdir(path)
     elif os.path.isdir(path):
         shutil.rmtree(path)
     elif os.path.lexists(path):
@@ -155,13 +213,14 @@ def clean_incomplete_results(clone_dir, log_filename="benchmark_scan.log"):
     for entry in os.listdir(clone_dir):
         if "_VULNHUNT_RESULTS_" in entry:
             full_path = os.path.join(clone_dir, entry)
-            is_link = os.path.islink(full_path)
+            is_link = _is_link(full_path)
             if not is_link and not os.path.isdir(full_path):
                 continue
-            # A planted symlink is never a valid results dir; remove it (safely,
-            # without following it) so a resume re-scans cleanly.
-            readme = os.path.join(full_path, "README.md")
-            if is_link or not (os.path.isfile(readme) and os.path.getsize(readme) > 100):
+            # A planted symlink or a results dir committed in the repo is never
+            # a valid results dir of ours; remove it (without following links)
+            # so a resume re-scans cleanly.
+            if (is_link or not _is_scan_results_dir(clone_dir, entry)
+                    or not _is_valid_readme(full_path)):
                 _remove_results_entry(full_path)
                 removed.append(entry)
                 log_file = os.path.join(clone_dir, log_filename)
@@ -182,7 +241,7 @@ def clean_prior_results(clone_dir, log_filename="benchmark_scan.log"):
     for entry in os.listdir(clone_dir):
         if "_VULNHUNT_RESULTS_" in entry:
             full_path = os.path.join(clone_dir, entry)
-            if os.path.islink(full_path) or os.path.isdir(full_path):
+            if _is_link(full_path) or os.path.isdir(full_path):
                 _remove_results_entry(full_path)
                 removed.append(entry)
     log_file = os.path.join(clone_dir, log_filename)

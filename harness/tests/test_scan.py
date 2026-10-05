@@ -547,3 +547,113 @@ def test_clean_incomplete_results_removes_dangling_log_link(tmp_path):
     os.symlink(str(tmp_path / "missing"), str(log))
     scan.clean_incomplete_results(str(clone), log_filename="batch_scan.log")
     assert not os.path.lexists(str(log))
+
+
+# --- results-dir discovery must not trust links or repo-committed results ---
+
+import shutil as _shutil
+import subprocess as _subprocess
+
+_BIG_README = "# Report\n" + ("x" * 200) + "\n"
+
+
+def _real_results(parent, name="clone_VULNHUNT_RESULTS_1"):
+    rd = parent / name
+    rd.mkdir()
+    (rd / "README.md").write_text(_BIG_README)
+    return rd
+
+
+def test_find_results_dir_skips_symlinked_results_root(tmp_path):
+    outside = _real_results(tmp_path, "outside")
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    os.symlink(str(outside), str(clone / "clone_VULNHUNT_RESULTS_1"))
+    assert scan.find_results_dir(str(clone)) is None
+    assert scan.has_valid_results(str(clone)) is False
+
+
+def test_find_results_dir_prefers_real_dir_over_planted_link(tmp_path):
+    outside = _real_results(tmp_path, "outside")
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    os.symlink(str(outside), str(clone / "aaa_VULNHUNT_RESULTS_0"))
+    real = _real_results(clone, "clone_VULNHUNT_RESULTS_1")
+    assert scan.find_results_dir(str(clone)) == str(real)
+
+
+def test_has_valid_results_rejects_symlinked_readme(tmp_path):
+    host = tmp_path / "host_secret.txt"
+    host.write_text("s" * 500)
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    rd = clone / "clone_VULNHUNT_RESULTS_1"
+    rd.mkdir()
+    os.symlink(str(host), str(rd / "README.md"))
+    assert scan.has_valid_results(str(clone)) is False
+
+
+def _git(*args, cwd):
+    _subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+         *args],
+        cwd=cwd, check=True, capture_output=True,
+    )
+
+
+needs_git = pytest.mark.skipif(_shutil.which("git") is None, reason="git not installed")
+
+
+def _clone_with_committed_results(tmp_path):
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    _git("init", "-q", cwd=clone)
+    (clone / "app.py").write_text("print(1)\n")
+    _real_results(clone, "clone_VULNHUNT_RESULTS_2020-01-01-000000")
+    _git("add", "-A", cwd=clone)
+    _git("commit", "-q", "-m", "init", cwd=clone)
+    return clone
+
+
+@needs_git
+def test_committed_results_dir_is_not_trusted(tmp_path):
+    # A repo that ships its own *_VULNHUNT_RESULTS_* dir would make --resume
+    # skip the scan and collect publish the attacker's report.
+    clone = _clone_with_committed_results(tmp_path)
+    assert scan.find_results_dir(str(clone)) is None
+    assert scan.has_valid_results(str(clone)) is False
+
+
+@needs_git
+def test_committed_results_dir_ignored_but_scan_output_found(tmp_path):
+    clone = _clone_with_committed_results(tmp_path)
+    produced = _real_results(clone, "clone_VULNHUNT_RESULTS_2026-10-05-120000")
+    assert scan.find_results_dir(str(clone)) == str(produced)
+    assert scan.has_valid_results(str(clone)) is True
+
+
+@needs_git
+def test_clean_incomplete_results_removes_committed_results_dir(tmp_path):
+    clone = _clone_with_committed_results(tmp_path)
+    removed = scan.clean_incomplete_results(str(clone), log_filename="batch_scan.log")
+    assert removed == ["clone_VULNHUNT_RESULTS_2020-01-01-000000"]
+    assert not (clone / "clone_VULNHUNT_RESULTS_2020-01-01-000000").exists()
+
+
+@needs_git
+def test_committed_results_fallback_when_git_unavailable(monkeypatch, tmp_path):
+    # Without a usable git the check degrades to the previous behaviour.
+    clone = _clone_with_committed_results(tmp_path)
+
+    def boom(*a, **k):
+        raise FileNotFoundError("git")
+    monkeypatch.setattr(scan.subprocess, "run", boom)
+    assert scan.has_valid_results(str(clone)) is True
+
+
+def test_results_dir_not_a_git_repo_still_trusted(tmp_path):
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    rd = _real_results(clone)
+    assert scan.find_results_dir(str(clone)) == str(rd)
+    assert scan.has_valid_results(str(clone)) is True
