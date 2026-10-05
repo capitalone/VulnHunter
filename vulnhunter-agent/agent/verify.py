@@ -53,7 +53,7 @@ from ._github_verify import (
     make_client,
 )
 from .auth import TokenProvider, make_token_manager, resolve_verify
-from .config import AgentConfig
+from .config import AgentConfig, active_model
 from . import audit as _audit
 from .repo_properties import RepoProperties
 from .token_client import get_github_token
@@ -222,7 +222,7 @@ async def run_verify(
         audit_scan_id = records[0].markers.results_dir
         audit_repo_slug = _target_repo_url_to_slug(records, host)
         audit_target_sha = commit or ""
-        audit_model_version = model_override or config.anthropic.model
+        audit_model_version = active_model(config, model_override)
         verify_wall_start = time.time()
         audit_props = audit_repo_properties or RepoProperties()
 

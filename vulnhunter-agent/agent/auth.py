@@ -1,9 +1,10 @@
-"""Anthropic auth providers for the agent.
+"""Model-provider auth providers for the agent.
 
 Three token providers share a ``get_valid_token()`` interface so call sites
 don't care which auth mode is active:
 
-- ``ApiKeyTokenManager`` — direct Anthropic API. ``get_valid_token()``
+- ``ApiKeyTokenManager`` — direct Anthropic or OpenAI-compatible API.
+  ``get_valid_token()``
   returns the configured API key verbatim (no network, no expiry).
 - ``OAuthTokenManager`` — OAuth2 client-credentials flow: redeem
   client_id + client_secret against the token endpoint, cache the access
@@ -59,7 +60,7 @@ def resolve_verify(tls: TLSConfig) -> str | bool:
 
 
 class ApiKeyTokenManager:
-    """Token provider for direct Anthropic API auth.
+    """Token provider for direct API-key authentication.
 
     Mirrors :class:`OAuthTokenManager`'s ``get_valid_token()`` interface so
     the rest of the agent is auth-mode agnostic. Returns the configured API
@@ -151,12 +152,14 @@ class OAuthTokenManager:
 def make_token_manager(
     config: AgentConfig, name: str = "vulnhunter"
 ) -> ApiKeyTokenManager | OAuthTokenManager | SigV4TokenManager:
-    """Return the Anthropic token provider for the configured auth mode.
+    """Return the token provider for the selected model runtime.
 
     All providers expose ``get_valid_token()``, so callers can use the
     result without caring whether auth is API-key, Bedrock/OAuth, or
     Bedrock/SigV4.
     """
+    if config.runtime.provider in ("openai", "codex"):
+        return ApiKeyTokenManager(config.openai.api_key, name=name)
     if config.anthropic.auth_mode == "bedrock_oauth":
         return OAuthTokenManager(config.oauth, config.tls, name=name)
     if config.anthropic.auth_mode == "bedrock_sigv4":

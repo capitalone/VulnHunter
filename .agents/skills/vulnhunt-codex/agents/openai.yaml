@@ -1,0 +1,4 @@
+interface:
+  display_name: "VulnHunter for Codex"
+  short_description: "Run deep read-only vulnerability scans"
+  default_prompt: "Use $vulnhunt-codex to run a deep static security scan of this repository."

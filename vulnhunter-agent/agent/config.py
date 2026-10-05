@@ -9,6 +9,11 @@ Env-var convention: ``VULNHUNT_<SECTION>_<KEY>`` (uppercase). Examples:
     VULNHUNT_OAUTH_CLIENT_ID
     VULNHUNT_OAUTH_CLIENT_SECRET
     VULNHUNT_ANTHROPIC_MODEL
+    VULNHUNT_RUNTIME_PROVIDER
+    VULNHUNT_OPENAI_MODEL
+    VULNHUNT_OPENAI_BASE_URL
+    VULNHUNT_OPENAI_API_KEY
+    VULNHUNT_CODEX_EXECUTABLE
     VULNHUNT_GITHUB_SCAN_TOKEN
     VULNHUNT_GITHUB_REPORTS_TOKEN
     VULNHUNT_GITHUB_BROKER_TOKEN_DIR
@@ -26,6 +31,46 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    """Select the model runtime used by scans and verification."""
+
+    provider: str = "anthropic"
+
+
+@dataclass(frozen=True)
+class OpenAIConfig:
+    """OpenAI Responses API configuration.
+
+    ``base_url`` is the API root (normally ending in ``/v1``), not the
+    ``/responses`` endpoint itself.  Keeping it configurable lets operators
+    use an OpenAI-compatible gateway without changing the agent.
+    """
+
+    model: str = "gpt-5.6-sol"
+    base_url: str = "https://api.openai.com/v1"
+    api_key: str = ""
+    reasoning_effort: str = "xhigh"
+    request_timeout_seconds: int = 3600
+    max_tool_rounds: int = 200
+    max_concurrent_agents: int = 6
+
+
+@dataclass(frozen=True)
+class CodexConfig:
+    """Codex CLI settings for the OpenAI-compatible agent runtime.
+
+    Model, endpoint, API key, and reasoning effort intentionally come from
+    :class:`OpenAIConfig`.  This block only controls the local Codex process;
+    keeping the provider settings in one place prevents the direct Responses
+    and Codex backends from silently drifting apart.
+    """
+
+    executable: str = "codex"
+    request_timeout_seconds: int = 14_400
+    max_concurrent_agents: int = 6
 
 
 @dataclass(frozen=True)
@@ -215,8 +260,8 @@ class IssuesConfig:
     """Post a GitHub issue per confirmed VulnHunter finding.
 
     The dedup pool is open issues on ``target_repo`` carrying ``dedup_label``.
-    Findings extraction and semantic dedup use the configured Bedrock proxy
-    via the existing OAuth token manager — no separate credentials.
+    Findings extraction and semantic dedup use the selected model runtime and
+    its existing token manager — no separate credentials.
     """
 
     enabled: bool
@@ -323,7 +368,40 @@ class AgentConfig:
     repo_properties: RepoPropertiesConfig = field(
         default_factory=RepoPropertiesConfig
     )
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    openai: OpenAIConfig = field(default_factory=OpenAIConfig)
+    codex: CodexConfig = field(default_factory=CodexConfig)
     source_path: Path | None = field(repr=False, default=None)
+
+    @property
+    def model_provider(self) -> str:
+        return self.runtime.provider
+
+    @property
+    def model(self) -> str:
+        if self.runtime.provider in ("openai", "codex"):
+            return self.openai.model
+        return self.anthropic.model
+
+
+def active_model(config: AgentConfig, override: str | None = None) -> str:
+    """Return the invocation override or the selected provider's model."""
+
+    return override or config.model
+
+
+def issue_models(config: AgentConfig) -> tuple[str, str]:
+    """Return primary/fallback models for extraction and deduplication.
+
+    The legacy Anthropic path keeps its Haiku→Sonnet routing.  The OpenAI and
+    Codex paths are intentionally Sol-only until workload evals justify adding
+    a cheaper tier, so primary and fallback both use the configured Sol model.
+    The existing retry layer still retries transport failures on that model.
+    """
+
+    if config.runtime.provider in ("openai", "codex"):
+        return config.openai.model, config.openai.model
+    return config.issues.haiku_model, config.issues.sonnet_model
 
 
 _DEFAULT_CONFIG_FILENAME = "config.toml"
@@ -421,6 +499,9 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         with config_path.open("rb") as fh:
             raw = tomllib.load(fh)
 
+    runtime_raw = raw.get("runtime", {})
+    openai_raw = raw.get("openai", {})
+    codex_raw = raw.get("codex", {})
     anthropic_raw = raw.get("anthropic", {})
     oauth_raw = raw.get("oauth", {})
     tls_raw = raw.get("tls", {})
@@ -428,6 +509,123 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
     telemetry_raw = raw.get("telemetry", {})
     scan_raw = raw.get("scan", {})
     github_raw = raw.get("github", {})
+
+    provider = str(
+        _resolve(runtime_raw, "runtime", "provider", default="anthropic")
+    ).strip().lower()
+    if provider not in ("anthropic", "openai", "codex"):
+        raise ValueError(
+            "runtime.provider must be 'anthropic', 'openai', or 'codex', "
+            f"got '{provider}'"
+        )
+    runtime = RuntimeConfig(provider=provider)
+
+    reasoning_effort = str(
+        _resolve(openai_raw, "openai", "reasoning_effort", default="xhigh")
+    ).strip().lower()
+    if reasoning_effort not in ("none", "low", "medium", "high", "xhigh", "max"):
+        raise ValueError(
+            "openai.reasoning_effort must be one of none, low, medium, high, "
+            f"xhigh, or max; got '{reasoning_effort}'"
+        )
+    openai_api_key = str(
+        _resolve(openai_raw, "openai", "api_key", default="")
+    ) or os.environ.get("OPENAI_API_KEY", "")
+    openai = OpenAIConfig(
+        model=str(
+            _resolve(openai_raw, "openai", "model", default="gpt-5.6-sol")
+        ).strip(),
+        base_url=str(
+            _resolve(
+                openai_raw,
+                "openai",
+                "base_url",
+                default="https://api.openai.com/v1",
+            )
+        ).strip().rstrip("/"),
+        api_key=openai_api_key,
+        reasoning_effort=reasoning_effort,
+        request_timeout_seconds=int(
+            _resolve(
+                openai_raw,
+                "openai",
+                "request_timeout_seconds",
+                kind=int,
+                default=3600,
+            )
+        ),
+        max_tool_rounds=int(
+            _resolve(
+                openai_raw,
+                "openai",
+                "max_tool_rounds",
+                kind=int,
+                default=200,
+            )
+        ),
+        max_concurrent_agents=int(
+            _resolve(
+                openai_raw,
+                "openai",
+                "max_concurrent_agents",
+                kind=int,
+                default=6,
+            )
+        ),
+    )
+    if provider in ("openai", "codex"):
+        if not openai.model:
+            raise ValueError("openai.model must not be empty")
+        if not openai.base_url:
+            raise ValueError("openai.base_url must not be empty")
+        if openai.request_timeout_seconds <= 0:
+            raise ValueError("openai.request_timeout_seconds must be positive")
+        if openai.max_tool_rounds <= 0:
+            raise ValueError("openai.max_tool_rounds must be positive")
+        if not 1 <= openai.max_concurrent_agents <= 16:
+            raise ValueError(
+                "openai.max_concurrent_agents must be between 1 and 16"
+            )
+
+    codex = CodexConfig(
+        executable=str(
+            _resolve(codex_raw, "codex", "executable", default="codex")
+        ).strip(),
+        request_timeout_seconds=int(
+            _resolve(
+                codex_raw,
+                "codex",
+                "request_timeout_seconds",
+                kind=int,
+                default=14_400,
+            )
+        ),
+        max_concurrent_agents=int(
+            _resolve(
+                codex_raw,
+                "codex",
+                "max_concurrent_agents",
+                kind=int,
+                default=6,
+            )
+        ),
+    )
+    if provider == "codex":
+        if not codex.executable:
+            raise ValueError("codex.executable must not be empty")
+        if codex.request_timeout_seconds <= 0:
+            raise ValueError("codex.request_timeout_seconds must be positive")
+        if not 1 <= codex.max_concurrent_agents <= 6:
+            raise ValueError(
+                "codex.max_concurrent_agents must be between 1 and 6"
+            )
+        # Codex CLI 0.144's config surface accepts these reasoning values.
+        # The direct Responses backend additionally supports none/max.
+        if openai.reasoning_effort not in ("low", "medium", "high", "xhigh"):
+            raise ValueError(
+                "runtime.provider='codex' requires openai.reasoning_effort "
+                "to be low, medium, high, or xhigh"
+            )
 
     auth_mode = (
         str(_resolve(anthropic_raw, "anthropic", "auth_mode", default="api_key"))
@@ -445,7 +643,15 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         _resolve(anthropic_raw, "anthropic", "api_key", default="")
     ) or os.environ.get("ANTHROPIC_API_KEY", "")
     anthropic = AnthropicConfig(
-        model=str(_resolve(anthropic_raw, "anthropic", "model", required=True)),
+        model=str(
+            _resolve(
+                anthropic_raw,
+                "anthropic",
+                "model",
+                default="" if provider in ("openai", "codex") else None,
+                required=provider == "anthropic",
+            )
+        ),
         auth_mode=auth_mode,
         api_key=api_key,
         bedrock_base_url=str(
@@ -898,5 +1104,8 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         logging=logging_cfg,
         audit=audit,
         repo_properties=repo_properties_cfg,
+        runtime=runtime,
+        openai=openai,
+        codex=codex,
         source_path=config_path,
     )

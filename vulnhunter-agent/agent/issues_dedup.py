@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import _llm
 from .auth import TokenProvider
-from .config import AgentConfig
+from .config import AgentConfig, active_model, issue_models
 from .issues_extract import Finding
 from .issues_fetch import OpenIssue
 
@@ -253,12 +253,14 @@ async def _semantic_pass(
     )
 
     union: dict[str, list[int]] = {}
+    primary_model, fallback_model = issue_models(config)
+    scan_model = active_model(config)
     for idx, chunk in enumerate(chunks, start=1):
         user = _build_user_msg(findings, chunk)
         try:
             parsed = await _llm.call_json_with_fallback(
-                primary_model=config.issues.haiku_model,
-                fallback_model=config.issues.sonnet_model,
+                primary_model=primary_model,
+                fallback_model=fallback_model,
                 system=_DEDUP_SYSTEM,
                 user=user,
                 config=config,
@@ -268,12 +270,14 @@ async def _semantic_pass(
                 audit_writer=audit_writer,
             )
         except _llm.LLMError as exc:
+            if scan_model in (primary_model, fallback_model):
+                raise
             # Haiku+Sonnet not available on this Bedrock deployment (GH#48);
             # fall back to the scan session's model — expensive but functional.
             logger.warning(
                 "[dedup] Haiku+Sonnet fallback exhausted for chunk %d/%d (%s); "
                 "retrying with scan-session model %s",
-                idx, len(chunks), exc, config.anthropic.model,
+                idx, len(chunks), exc, scan_model,
             )
             if audit_writer is not None:
                 from .audit import build_model_fallback
@@ -282,15 +286,15 @@ async def _semantic_pass(
                     build_model_fallback(
                         app_id=config.audit.app_id,
                         actor=config.audit.actor,
-                        from_model=config.issues.sonnet_model,
-                        to_model=config.anthropic.model,
+                        from_model=fallback_model,
+                        to_model=scan_model,
                         stage=f"dedup chunk {idx}/{len(chunks)}",
                         reason=str(exc),
                     )
                 )
             try:
                 parsed = await _llm.call_json(
-                    model=config.anthropic.model,
+                    model=scan_model,
                     system=_DEDUP_SYSTEM,
                     user=user,
                     config=config,
@@ -306,7 +310,7 @@ async def _semantic_pass(
                         build_model_unavailable(
                             app_id=config.audit.app_id,
                             actor=config.audit.actor,
-                            from_model=config.anthropic.model,
+                            from_model=scan_model,
                             stage=f"dedup chunk {idx}/{len(chunks)}",
                             reason=str(final_exc),
                         )

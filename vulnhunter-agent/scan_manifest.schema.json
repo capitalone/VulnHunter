@@ -31,7 +31,7 @@
       "enum": [0, 1, 2, 3, 4]
     },
     "cost_usd": {
-      "description": "Cumulative USD cost the agent observed for this run, as reported by the Claude Agent SDK ResultMessage (running-max across continuations).",
+      "description": "Cumulative USD cost the agent observed for this run. Provider-reported when available; 0 when an OpenAI-compatible endpoint reports tokens but no authoritative USD charge.",
       "type": "number",
       "minimum": 0
     },

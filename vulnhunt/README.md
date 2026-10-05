@@ -11,7 +11,8 @@ under `phases/`; there is no Python package to install.
 
 This skill ships as part of the [VulnHunter](https://github.com/capitalone/vulnhunter)
 repository. From the repository root, run the shared installer to copy all skills
-(including this one) into `~/.claude/skills/`:
+(including this one) into `~/.claude/skills/`. It also installs the Codex
+orchestrator into `~/.agents/skills/vulnhunt-codex/`:
 
 ```bash
 ./install.sh      # installs vulnhunt, vulnhunt-fix-verify, and vulnhunter-fix
@@ -24,6 +25,12 @@ file to refresh the installed copy.
 
 > **Run on Opus.** The falsification discipline that keeps false positives low
 > depends on frontier Opus-class reasoning. You supply your own model access.
+
+For headless GPT-5.6 Sol scans, use the
+[`vulnhunter-agent`](../vulnhunter-agent/README.md) with
+`[runtime] provider = "codex"`. The repo-scoped `$vulnhunt-codex` skill maps
+Codex's native subagents and sandbox to these same canonical phase files; it is
+static-only and pins the recommended model policy to Sol + xhigh.
 
 ## Usage
 

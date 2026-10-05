@@ -50,7 +50,12 @@ from claude_agent_sdk import (
 from jsonschema import Draft202012Validator
 
 from .build_settings import build_claude_settings
-from .config import AgentConfig
+from .config import AgentConfig, active_model
+from .openai_runtime import (
+    OpenAIToolRuntime,
+    ToolWorkspace,
+    skill_instructions,
+)
 from ._stream_events import (
     SessionTotals,
     _agent_name_from_started,
@@ -89,6 +94,18 @@ def _schema_root() -> Path:
     here = Path(__file__).resolve()
     # agent/verify_runner.py → walk to repo root.
     return here.parent.parent
+
+
+def _verify_skill_path() -> Path | None:
+    """Locate the verify skill installation or source checkout."""
+
+    candidates = [
+        Path("/home/appuser/.claude/skills/vulnhunt-fix-verify"),
+        Path("/home/appuser/.agents/skills/vulnhunt-fix-verify"),
+        Path.home() / ".claude" / "skills" / "vulnhunt-fix-verify",
+        Path.home() / ".agents" / "skills" / "vulnhunt-fix-verify",
+    ]
+    return next((path for path in candidates if (path / "SKILL.md").is_file()), None)
 
 
 class OutputKind(str, Enum):
@@ -257,8 +274,21 @@ async def run_verify_session(
     forensics trail survives even if the orchestrator crashes
     mid-run.
     """
-    model = model_override or config.anthropic.model
+    model = active_model(config, model_override)
     scan_id = out_dir.parent.name  # one level up from out/iter-N — readable run id
+
+    # The Codex backend is scan-native. Verify currently reuses the hardened
+    # static Responses tool envelope until it gets its own Codex workflow.
+    if config.runtime.provider in ("openai", "codex"):
+        return await _run_openai_verify_session(
+            config=config,
+            auth_token=auth_token,
+            model=model,
+            cwd=cwd,
+            out_dir=out_dir,
+            prompt=prompt,
+            log_path=log_path,
+        )
 
     settings_json = build_claude_settings(
         config, auth_token, model=model, scan_id=scan_id
@@ -331,6 +361,78 @@ async def run_verify_session(
         message_count,
     )
     log_session_totals(totals, "Verify")
+    return classify_output(out_dir)
+
+
+async def _run_openai_verify_session(
+    *,
+    config: AgentConfig,
+    auth_token: str,
+    model: str,
+    cwd: Path,
+    out_dir: Path,
+    prompt: str,
+    log_path: Path,
+) -> VerifySessionResult:
+    """Drive one verify run through the static Responses tool envelope."""
+
+    skill_path = _verify_skill_path()
+    if skill_path is None:
+        return VerifySessionResult(
+            kind=OutputKind.EMPTY,
+            output_path=None,
+            parsed=None,
+            error_detail=(
+                "vulnhunt-fix-verify skill was not found in an installed skill "
+                "directory"
+            ),
+        )
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    workspace = ToolWorkspace(
+        cwd=cwd,
+        read_roots=[cwd, skill_path],
+        write_root=out_dir,
+    )
+    instructions = skill_instructions(
+        skill_path=skill_path,
+        cwd=cwd,
+        write_root=out_dir,
+    )
+    try:
+        async with OpenAIToolRuntime(
+            config,
+            model=model,
+            api_key=auth_token,
+            workspace=workspace,
+            instructions=instructions,
+        ) as runtime:
+            result = await runtime.run(prompt)
+    except Exception as exc:  # noqa: BLE001 - provider/runtime boundary
+        logger.exception("OpenAI verify session failed")
+        with log_path.open("a", encoding="utf-8") as log_fh:
+            log_fh.write(f"\n!!! OpenAI Responses exception: {exc!r}\n")
+        return VerifySessionResult(
+            kind=OutputKind.EMPTY,
+            output_path=None,
+            parsed=None,
+            error_detail=f"OpenAI Responses session raised: {exc!r}",
+        )
+
+    elapsed = time.monotonic() - started
+    with log_path.open("a", encoding="utf-8") as log_fh:
+        log_fh.write(
+            f"\n--- OpenAI verify session: model={model} "
+            f"requests={result.usage.requests} elapsed={elapsed:.1f}s ---\n"
+        )
+        log_fh.write(result.text[:2000] + "\n")
+    logger.info(
+        "OpenAI verify session finished in %.1fs (%d requests, %d tokens)",
+        elapsed,
+        result.usage.requests,
+        result.usage.total_tokens,
+    )
     return classify_output(out_dir)
 
 

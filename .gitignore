@@ -50,6 +50,9 @@ clones/
 # Agent runtime artifacts
 verify_runs/
 config.toml
+# Keep the credential-free Codex project defaults; the generic config.toml
+# rule above is for operator runtime secrets.
+!.codex/config.toml
 
 # vulnhunter-fix runtime/work dirs (generated locally, never committed)
 work/
@@ -58,4 +61,3 @@ work/
 
 # Stray dir from a mis-quoted URL (e.g. a test writing "https://..." as a path)
 https:/
-

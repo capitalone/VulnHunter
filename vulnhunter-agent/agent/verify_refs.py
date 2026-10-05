@@ -3,7 +3,7 @@
 Cross-repo references in developer comments (URLs, ``../`` paths,
 named repo identifiers) point at source code that lives outside the
 target checkout. To verify a fix that's spread across two repos, the
-verifier needs access to both — so the orchestrator runs this Haiku
+verifier needs access to both — so the orchestrator runs this model
 pre-flight before invoking the skill, scans every comment for
 cross-repo references, resolves each via ``resolve_repo_hint``, and
 pre-clones whatever it can.
@@ -15,7 +15,7 @@ mechanism was retired once the pre-flight existed — the skill now
 classifies any unresolved cross-repo reference as
 ``rejected_unverifiable`` (R2) and continues.
 
-This module calls the scan-session model (``config.anthropic.model``) —
+This module calls the selected scan-session model —
 the same model the scan stage runs — to extract cross-repo references.
 Unlike the issues stage it does NOT use the haiku->sonnet fallback tiers
 and does not escalate on failure; a failed pre-flight degrades to
@@ -44,7 +44,7 @@ from typing import Any
 
 from . import _llm
 from .auth import TokenProvider
-from .config import AgentConfig
+from .config import AgentConfig, active_model
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,7 @@ async def extract_cross_repo_references(
     token_manager: TokenProvider,
     cost_tracker: "_llm.CostStats | None" = None,
 ) -> list[dict[str, str]]:
-    """Run Haiku (Sonnet fallback) over ``comments_text`` and return the
+    """Run the selected scan model over ``comments_text`` and return the
     list of cross-repo references.
 
     Each entry of the returned list matches the
@@ -138,12 +138,12 @@ async def extract_cross_repo_references(
         "----- END COMMENTS -----\n"
     )
     try:
-        # Verify uses the same model as the scan (config.anthropic.model), not
+        # Verify uses the same model as the scan, not
         # the issues-stage haiku->sonnet tiers, and does NOT fall back: this is
         # a pre-flight optimization, so on any LLM failure we degrade to
         # skill-side R2 detection rather than escalating to another model.
         parsed = await _llm.call_json(
-            model=config.anthropic.model,
+            model=active_model(config),
             system=_EXTRACTOR_SYSTEM,
             user=user_msg,
             config=config,

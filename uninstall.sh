@@ -10,6 +10,7 @@ if [ -z "${HOME:-}" ]; then
 fi
 
 SKILLS_PARENT="$HOME/.claude/skills"
+CODEX_SKILLS_PARENT="$HOME/.agents/skills"
 
 # Skill names to remove (must match the names install.sh writes).
 SKILLS=(vulnhunt vulnhunt-fix-verify vulnhunter-fix)
@@ -29,6 +30,19 @@ for name in "${SKILLS[@]}"; do
         echo "$name is not installed (no entry at $dst)"
     fi
 done
+
+codex_dst="$CODEX_SKILLS_PARENT/vulnhunt-codex"
+if [ -L "$codex_dst" ]; then
+    rm "$codex_dst"
+    echo "Removed symlink $codex_dst"
+    removed_any=1
+elif [ -d "$codex_dst" ]; then
+    rm -rf "$codex_dst"
+    echo "Removed $codex_dst"
+    removed_any=1
+else
+    echo "vulnhunt-codex is not installed (no entry at $codex_dst)"
+fi
 
 echo ""
 if [ "$removed_any" -eq 1 ]; then

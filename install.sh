@@ -10,6 +10,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILLS_PARENT="$HOME/.claude/skills"
+CODEX_SKILLS_PARENT="$HOME/.agents/skills"
 
 # vulnhunter-fix runtime deps. The skill's scripts/_skill_bootstrap.py expects
 # a bundled venv at <skill>/.venv containing these; without it preflight's
@@ -135,6 +136,24 @@ for entry in "${SKILLS[@]}"; do
 
     installed_any=1
 done
+
+# Install the Codex-native orchestrator separately. It reuses the canonical
+# phase prompts from the Claude-compatible vulnhunt copy above, so there is one
+# methodology source and two thin host adapters.
+CODEX_SKILL_SRC="$SCRIPT_DIR/.agents/skills/vulnhunt-codex"
+CODEX_SKILL_DST="$CODEX_SKILLS_PARENT/vulnhunt-codex"
+if [ -f "$CODEX_SKILL_SRC/SKILL.md" ]; then
+    mkdir -p "$CODEX_SKILLS_PARENT"
+    if [ -L "$CODEX_SKILL_DST" ]; then
+        rm "$CODEX_SKILL_DST"
+    elif [ -d "$CODEX_SKILL_DST" ]; then
+        rm -rf "$CODEX_SKILL_DST"
+    fi
+    cp -R "$CODEX_SKILL_SRC" "$CODEX_SKILL_DST"
+    git -C "$SCRIPT_DIR" rev-parse HEAD > "$CODEX_SKILL_DST/.installed-from" 2>/dev/null || true
+    echo "Installed vulnhunt-codex (copied to $CODEX_SKILL_DST)"
+    installed_any=1
+fi
 
 echo ""
 if [ "$installed_any" -eq 1 ]; then

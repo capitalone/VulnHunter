@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import _llm
 from .auth import TokenProvider
-from .config import AgentConfig
+from .config import AgentConfig, active_model, issue_models
 
 if TYPE_CHECKING:
     from .audit import AuditWriter
@@ -204,11 +204,13 @@ async def extract_findings(
         f"{content}\n"
         "----- END REPORT -----\n"
     )
+    primary_model, fallback_model = issue_models(config)
+    scan_model = active_model(config)
 
     try:
         parsed = await _llm.call_json_with_fallback(
-            primary_model=config.issues.haiku_model,
-            fallback_model=config.issues.sonnet_model,
+            primary_model=primary_model,
+            fallback_model=fallback_model,
             system=_EXTRACTOR_SYSTEM,
             user=user_msg,
             config=config,
@@ -218,6 +220,8 @@ async def extract_findings(
             audit_writer=audit_writer,
         )
     except _llm.LLMError as exc:
+        if scan_model in (primary_model, fallback_model):
+            raise
         # Both haiku + sonnet failed (typically because they're not
         # provisioned on this Bedrock deployment — see GH#48). Fall back
         # to the scan session's model, which we know works on this
@@ -227,7 +231,7 @@ async def extract_findings(
             "[extract] Haiku+Sonnet fallback exhausted (%s); retrying with "
             "scan-session model %s",
             exc,
-            config.anthropic.model,
+            scan_model,
         )
         if audit_writer is not None:
             from .audit import build_model_fallback
@@ -236,8 +240,8 @@ async def extract_findings(
                 build_model_fallback(
                     app_id=config.audit.app_id,
                     actor=config.audit.actor,
-                    from_model=config.issues.sonnet_model,
-                    to_model=config.anthropic.model,
+                    from_model=fallback_model,
+                    to_model=scan_model,
                     stage="extract",
                     reason=str(exc),
                     report_id=results_dir.name,
@@ -245,7 +249,7 @@ async def extract_findings(
             )
         try:
             parsed = await _llm.call_json(
-                model=config.anthropic.model,
+                model=scan_model,
                 system=_EXTRACTOR_SYSTEM,
                 user=user_msg,
                 config=config,
@@ -262,7 +266,7 @@ async def extract_findings(
                     build_model_unavailable(
                         app_id=config.audit.app_id,
                         actor=config.audit.actor,
-                        from_model=config.anthropic.model,
+                        from_model=scan_model,
                         stage="extract",
                         reason=str(final_exc),
                         report_id=results_dir.name,

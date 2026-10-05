@@ -9,10 +9,50 @@
 # case. Examples:
 #     VULNHUNT_ANTHROPIC_API_KEY   (or the standard ANTHROPIC_API_KEY)
 #     VULNHUNT_ANTHROPIC_MODEL
+#     VULNHUNT_RUNTIME_PROVIDER     (anthropic/openai/codex)
+#     VULNHUNT_OPENAI_API_KEY       (or the standard OPENAI_API_KEY)
+#     VULNHUNT_OPENAI_BASE_URL
+#     VULNHUNT_OPENAI_MODEL
+#     VULNHUNT_CODEX_EXECUTABLE
 #     VULNHUNT_GITHUB_SCAN_TOKEN
 #     VULNHUNT_GITHUB_REPORTS_TOKEN
 #     VULNHUNT_SANDBOX_ENABLED       (true/false)
 #     VULNHUNT_SCAN_ALLOWED_TOOLS    (comma-separated)
+
+[runtime]
+# Model execution backend. "anthropic" preserves the existing Claude Agent
+# SDK behavior. "openai" uses the direct Responses runtime. "codex" runs
+# the Codex CLI against the same OpenAI-compatible endpoint.
+provider = "anthropic"
+
+[openai]
+# OpenAI-compatible Responses API. base_url is the API root, normally ending
+# in /v1; the agent appends /responses. The custom endpoint must implement
+# Responses function calls and accept manual replay of response output items.
+base_url = "https://api.openai.com/v1"
+api_key = ""
+model = "gpt-5.6-sol"
+reasoning_effort = "xhigh"
+# Security scans can run for a long time at xhigh. This timeout applies to one
+# HTTP request, not to the full multi-turn scan.
+request_timeout_seconds = 3600
+# Fail closed instead of allowing an unbounded tool loop.
+max_tool_rounds = 200
+# Caps simultaneously running spawn_agent calls. The skill itself dispatches
+# in waves; this is the host-side hard ceiling.
+max_concurrent_agents = 6
+
+[codex]
+# Used only when [runtime].provider = "codex". Endpoint, API key, model, and
+# reasoning effort still come from [openai] above. The key is passed only to
+# the Codex process and stripped from model-launched subprocesses.
+executable = "codex"
+# Whole Codex session timeout. Individual Responses stream idle timeout comes
+# from [openai].request_timeout_seconds.
+request_timeout_seconds = 14400
+# Orchestration wave size. Current Codex subagents inherit Sol + xhigh from the
+# parent; the vulnhunt-codex skill enforces this limit (maximum 6).
+max_concurrent_agents = 6
 
 [anthropic]
 # How the agent authenticates to Claude:
@@ -158,8 +198,9 @@ target_repo = ""
 labels = ["security", "vulnhunter"]
 # Open issues with this label are the dedup pool.
 dedup_label = "vulnhunter"
-# Models used for findings extraction and semantic dedup. Haiku is tried
-# first; Sonnet is the fallback on transport / parse failure.
+# Models used for findings extraction and semantic dedup in Anthropic mode.
+# OpenAI and Codex modes intentionally use [openai].model for both stages
+# (Sol-only).
 haiku_model = "claude-haiku-4-5"
 sonnet_model = "claude-sonnet-5"
 # Set to false to skip the LLM semantic-compare pass and rely only on the
@@ -188,9 +229,10 @@ per_turn_usage = false
 retries = false
 
 [verify]
-# Inputs for the `--mode=verify` orchestrator. Verify reuses `anthropic`,
-# `oauth`, `github`, `publish`, and `tls` from above; this section holds
-# verify-specific knobs only.
+# Inputs for the `--mode=verify` orchestrator. Verify reuses the selected model
+# provider plus `oauth`, `github`, `publish`, and `tls` from above; this section
+# holds verify-specific knobs only. Codex scan mode currently uses the direct
+# static Responses envelope for this shorter verification workflow.
 scratch_base_dir = "./verify_runs"
 clone_timeout_seconds = 300
 
@@ -210,4 +252,3 @@ clone_timeout_seconds = 300
 [repo_properties.github_property_map]
 # "appId" = "app_id_tag"
 # "ownerTeam" = "owner_team"
-

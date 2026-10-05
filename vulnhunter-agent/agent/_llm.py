@@ -1,11 +1,8 @@
-"""LLM calls routed through the Claude Agent SDK.
+"""Small JSON-oriented LLM calls for supported model runtimes.
 
-The scan stage already runs the SDK with bearer auth via env vars
-(``ANTHROPIC_AUTH_TOKEN`` + ``CLAUDE_CODE_USE_BEDROCK=1``). Rather
-than duplicate that machinery for the issues stage, we spin up a
-short-lived ``ClaudeSDKClient`` per call: same auth, same transport,
-same FM-Gateway / Bedrock path, just with no skill loaded and no
-tools available so the model just answers our prompt.
+The Anthropic path uses a short-lived ``ClaudeSDKClient`` per call with no
+tools. The OpenAI path uses one tool-free Responses request through the same
+base URL, API key, model, and reasoning settings as the scan runtime.
 
 Two entry points (both async):
 - ``call_json``: one model call with same-model retry on transient
@@ -42,6 +39,7 @@ import json
 import logging
 import re
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -64,6 +62,7 @@ from tenacity import (
 from .auth import TokenProvider
 from .build_settings import build_claude_settings
 from .config import AgentConfig
+from .openai_runtime import OpenAIResponsesError, complete_text
 from ._transient import classify as _classify_transient, is_transient_status
 
 if TYPE_CHECKING:
@@ -265,6 +264,34 @@ async def _send_prompt(
     when the upstream 429 surfaces via ResultMessage rather than as an
     SDK exception.
     """
+    # Codex is valuable for the agentic scan. The small schema-oriented
+    # extraction/dedup calls remain direct Responses requests so they do not
+    # pay CLI startup/tool-orchestration overhead.
+    if config.runtime.provider in ("openai", "codex"):
+        started = time.monotonic()
+        try:
+            text, usage = await complete_text(
+                config=config,
+                api_key=auth_token,
+                model=model,
+                system=system,
+                user=user,
+            )
+        except OpenAIResponsesError as exc:
+            if exc.transient:
+                raise TransientLLMError(str(exc)) from exc
+            raise LLMError(str(exc)) from exc
+        if cost_tracker is not None:
+            # Compatible gateways expose token counts but not an authoritative
+            # USD charge. Preserve the manifest contract with cost_usd=0 while
+            # still tracking calls/turns/duration accurately.
+            cost_tracker.num_turns += usage.requests
+            cost_tracker.duration_api_ms += int(
+                (time.monotonic() - started) * 1000
+            )
+            cost_tracker.calls += 1
+        return text
+
     settings_json = build_claude_settings(config, auth_token, model=model)
     with tempfile.TemporaryDirectory(prefix="vulnhunt-llm-") as cwd:
         options = ClaudeAgentOptions(
@@ -517,6 +544,11 @@ async def call_json_with_fallback(
             stage=stage,
         )
     except LLMError as exc:
+        if fallback_model == primary_model:
+            # Sol-only OpenAI/Codex modes intentionally have no cheaper tier.
+            # ``call_json`` already exhausted same-model transient retries;
+            # issuing the identical request again would only add latency.
+            raise
         stage_tag = f"[{stage}] " if stage else ""
         logger.warning(
             "%sPrimary model %s failed (%s); retrying with %s",
@@ -552,5 +584,5 @@ async def call_json_with_fallback(
 
 
 def estimate_tokens(text: str) -> int:
-    """Rough char-to-token estimate. Anthropic averages ~4 chars/token."""
+    """Conservative provider-neutral char-to-token estimate."""
     return max(1, len(text) // 4)

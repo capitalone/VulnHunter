@@ -132,9 +132,28 @@ def _patch_skill_candidates(
             return home
 
     monkeypatch.setattr(runner_mod, "Path", _PathWrapper)
+    monkeypatch.setattr(
+        runner_mod,
+        "_SOURCE_VULNHUNT_SKILL",
+        home / "missing-source-vulnhunt",
+    )
 
 
 class TestVulnhuntSkillPath:
+    def test_source_checkout_is_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        source = tmp_path / "source" / "vulnhunt"
+        source.mkdir(parents=True)
+        (source / "SKILL.md").write_text("ok")
+        _patch_skill_candidates(
+            monkeypatch,
+            container=tmp_path / "no-container",
+            home=tmp_path / "no-home",
+        )
+        monkeypatch.setattr(runner_mod, "_SOURCE_VULNHUNT_SKILL", source)
+        assert _vulnhunt_skill_path() == source
+
     def test_container_path_takes_priority(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

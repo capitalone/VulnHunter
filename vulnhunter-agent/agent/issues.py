@@ -23,7 +23,7 @@ from . import issues_dedup, issues_extract, issues_fetch, issues_render, skill_v
 from ._github import api_base, extract_timestamp, parse_owner_repo
 from ._llm import CostStats
 from .auth import TokenProvider, resolve_verify
-from .config import AgentConfig
+from .config import AgentConfig, active_model
 from .issues_extract import ExtractedReport, Finding
 from .issues_render import CleanScanContext
 from .repo_properties import RepoProperties
@@ -505,7 +505,7 @@ def _build_clean_scan_ctx(
         scan_started_at=started_iso,
         scan_completed_at=scan_completed_at,
         duration_seconds=duration,
-        model_version=config.anthropic.model,
+        model_version=active_model(config),
         skill_version=skill_version.resolve(),
         report_url=report_url or "",
     )
@@ -538,7 +538,7 @@ def _emit_clean_scan_notified(
                 repo_slug=repo_slug,
                 report_id=report_id,
                 github_issue_url=issue_url,
-                model_version=config.anthropic.model,
+                model_version=active_model(config),
                 target_sha=commit_sha,
                 to_status=to_status,
                 notes=notes,

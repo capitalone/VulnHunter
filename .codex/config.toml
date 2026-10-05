@@ -1,0 +1,10 @@
+# Repository defaults for contributors using Codex on VulnHunter itself.
+# The headless scanner injects its compatible provider per invocation; do not
+# put endpoint URLs or credentials in this project file.
+model = "gpt-5.6-sol"
+model_reasoning_effort = "xhigh"
+web_search = "disabled"
+
+# Spawned agents inherit the parent model and reasoning effort. The
+# vulnhunt-codex skill enforces bounded waves (maximum six) so this remains
+# compatible with Codex CLI releases before the newer global [agents] keys.

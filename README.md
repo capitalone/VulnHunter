@@ -20,8 +20,10 @@ Developed internally at Capital One, VulnHunter is released to the community bec
 
 > [!IMPORTANT]
 > **Prerequisites & Model Requirements**
-> Built and optimized for **Claude Opus** running in **[Claude Code](https://docs.claude.com/en/docs/claude-code)**. 
-> The framework depends on deep, multi-step reasoning and requires frontier Opus-class models. **You supply your own model access.**
+> Built and optimized for frontier reasoning models. The original skills run on
+> **Claude Opus** in **[Claude Code](https://docs.claude.com/en/docs/claude-code)**;
+> the headless scanner also supports **GPT-5.6 Sol at xhigh** through Codex or a
+> direct OpenAI-compatible Responses API. **You supply your own model access.**
 
 ---
 
@@ -59,6 +61,8 @@ Each component is organized into a self-contained subtree:
 | `vulnhunter-fix/` | The `/vulnhunter-fix` skill, its companion Python helper package, and tests. See [`vulnhunter-fix/README.md`](vulnhunter-fix/README.md). |
 | `vulnhunt-fix-verify/` | The `/vulnhunt-fix-verify` standalone verification skill (Prompt-only). See [`vulnhunt-fix-verify/README.md`](vulnhunt-fix-verify/README.md). |
 | `vulnhunter-agent/` | Config-driven headless runtime wrapper that runs scans and files GitHub issues. See [`vulnhunter-agent/README.md`](vulnhunter-agent/README.md). |
+| `.agents/skills/vulnhunt-codex/` | Codex-native static scan orchestrator that reuses the canonical `vulnhunt/phases/` prompts. |
+| `docs/codex-cli.md` | Setup and usage guide for interactive Codex scans and OpenAI-compatible headless Codex runs. |
 | `harness/` | Developer tooling for running large batch-scans and benchmarking detection accuracy. See [`harness/README.md`](harness/README.md). |
 
 ---
@@ -66,7 +70,8 @@ Each component is organized into a self-contained subtree:
 ## Requirements & Setup
 
 ### Prerequisites
-* [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), authenticated with access to **Claude Opus**.
+* For the Claude backend: [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), authenticated with access to **Claude Opus**.
+* For the Codex backend: [Codex CLI](https://developers.openai.com/codex/cli/) 0.144.1+ plus access to **GPT-5.6 Sol** through OpenAI or a compatible Responses endpoint. See the [VulnHunter Codex CLI guide](docs/codex-cli.md).
 * Python 3.12+ (Required only for the runtime agent and the benchmarking harness).
 * *Responsibility Check:* Ensure you are only scanning code bases you are explicitly authorized to analyze.
 
@@ -77,7 +82,7 @@ Each component is organized into a self-contained subtree:
 git clone https://github.com/capitalone/vulnhunter.git
 cd vulnhunter
 
-# Copy skills into ~/.claude/skills/
+# Copy Claude skills into ~/.claude/skills/ and the Codex skill into ~/.agents/skills/
 ./install.sh      
 
 # (Optional) To clean up or remove installed skills
@@ -100,11 +105,13 @@ REM .\uninstall.cmd
 > [!NOTE]
 > `install.sh`/`install.cmd` copy files directly (rather than symlinking) because symlinks can break `find`/`glob` functionality inside subagents. Re-run the install script after pulling updates to refresh your local environment.
 
+For Codex installation, interactive invocation, compatible API configuration, expected output, and troubleshooting, see **[Using VulnHunter with Codex CLI](docs/codex-cli.md)**.
+
 ---
 
 ## Usage Guide
 
-### 1. Run the Scanner
+### Run the Scanner with Claude Code
 ```bash
 claude --model opus --add-dir ~/.claude/skills/vulnhunt --add-dir ~/.claude/skills/vulnhunt/phases
 
@@ -112,7 +119,22 @@ claude --model opus --add-dir ~/.claude/skills/vulnhunt --add-dir ~/.claude/skil
 /vulnhunt
 ```
 
-### 2. Run the Fixer
+### Run the Scanner with Codex CLI
+
+```bash
+codex \
+  -C /absolute/path/to/authorized-target \
+  -m gpt-5.6-sol \
+  -c 'model_reasoning_effort="xhigh"' \
+  -s workspace-write \
+  '$vulnhunt-codex Run a deep static security scan of this authorized repository. Do not execute target code.'
+```
+
+The installer makes `$vulnhunt-codex` available from any repository. See the
+[Codex CLI guide](docs/codex-cli.md) for authentication, skill verification,
+OpenAI-compatible endpoints, headless runs, and troubleshooting.
+
+### Run the Fixer
 The fixer requires `git`, the GitHub CLI (`gh`) authenticated to your target repositories, and its Python helpers installed (`pip install -e ".[dev]"` inside the `vulnhunter-fix/` directory).
 
 ```bash
@@ -123,7 +145,7 @@ claude --model opus --add-dir ~/.claude/skills/vulnhunter-fix
 ```
 *See [`vulnhunter-fix/README.md`](vulnhunter-fix/README.md) for advanced operational modes and configuration settings.*
 
-### 3. Run the Fix Verifier
+### Run the Fix Verifier
 The verifier runs strictly read-only over trusted roots under a tight tool envelope (Read/Write/Edit/Glob/Grep/Agent—**no Bash execution, no network access**). The caller must pre-create the output (`out`) directory.
 
 ```bash
@@ -184,7 +206,7 @@ cd vulnhunter-agent && pip install -e ".[dev]" && python -m pytest -q
 
 ## Contributing, Security & License
 
-* **A Note on Models:** VulnHunter was precision-tuned for **Claude Opus** and **Claude Code**. Its low false-positive discipline relies heavily on frontier-class reasoning, though the underlying orchestration patterns can be adapted to other advanced foundation models.
+* **A Note on Models:** VulnHunter's low false-positive discipline relies on frontier-class reasoning. Supported scan paths are Claude Opus/Claude Code and GPT-5.6 Sol xhigh through the headless OpenAI or Codex backends; cheaper model tiers are intentionally not selected automatically.
 * **Contributing:** See [CONTRIBUTING.md](CONTRIBUTING.md) to propose core framework improvements, prompt updates, or wider model support configurations.
 * **Security:** Review [SECURITY.md](SECURITY.md) for instructions on how to safely report security vulnerabilities found within VulnHunter itself.
 * **License:** Distributed under the terms of the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
