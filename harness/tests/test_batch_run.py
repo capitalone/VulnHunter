@@ -12,6 +12,30 @@ def test_repo_name_from_url():
     assert brun.repo_name_from_url("https://github.com/a/widget/") == "widget"
 
 
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://github.com/Acme/Widget", "acme__widget"),
+        ("ssh://git@github.com/Acme/Widget.git", "acme__widget"),
+        ("git@github.com:Acme/Widget.git", "acme__widget"),
+    ],
+)
+def test_repo_target_name_from_url(url, expected):
+    assert brun.repo_target_name_from_url(url) == expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/acme/widget",
+        "https://github.com/acme/widget/subdir",
+    ],
+)
+def test_repo_target_name_rejects_unsupported_urls(url):
+    with pytest.raises(ValueError):
+        brun.repo_target_name_from_url(url)
+
+
 class _Args:
     def __init__(self, **kw):
         self.__dict__.update(kw)
@@ -47,6 +71,40 @@ def test_cmd_scan_success(monkeypatch, tmp_path):
         ]
     monkeypatch.setattr(brun, "scan_targets", fake_scan_targets)
     brun.cmd_scan(_Args(re_clone=False, resume=False, max_workers=2, readonly=False))
+
+
+def test_cmd_scan_uses_unique_repository_targets(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        brun,
+        "parse_repo_list",
+        lambda: [
+            "https://github.com/team-one/service",
+            "https://github.com/team-two/service",
+            "git@github.com:TEAM-ONE/service.git",
+        ],
+    )
+    monkeypatch.setattr(brun, "BATCH_CLONE_BASE_DIR", str(tmp_path))
+    clone_dirs = []
+    monkeypatch.setattr(
+        brun,
+        "shallow_clone",
+        lambda url, target_dir, re_clone=False: (
+            clone_dirs.append(target_dir) or target_dir,
+            None,
+        ),
+    )
+    scanned = []
+    monkeypatch.setattr(
+        brun,
+        "scan_targets",
+        lambda targets, **kwargs: scanned.extend(targets) or [],
+    )
+
+    brun.cmd_scan(_Args(re_clone=False, resume=False, max_workers=2, readonly=False))
+
+    expected = ["team-one__service", "team-two__service"]
+    assert [brun.os.path.basename(path) for path in clone_dirs] == expected
+    assert [target["key"] for target in scanned] == expected
 
 
 def test_cmd_scan_resume_all_have_results(monkeypatch, tmp_path):

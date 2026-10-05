@@ -38,8 +38,11 @@ _RE_FINDING_ID = re.compile(
     r"<!--\s*vulnhunt-finding-id:\s*(VULN-\d{3})\s*-->", re.IGNORECASE
 )
 _RE_RESULTS_DIR = re.compile(
-    r"<!--\s*vulnhunt-results-dir:\s*([^\s<>]+)\s*-->", re.IGNORECASE
+    r"<!--\s*vulnhunt-results-dir:\s*"
+    r"([A-Za-z0-9._-]+_VULNHUNT_RESULTS_[0-9A-Za-z._-]+)\s*-->",
+    re.IGNORECASE,
 )
+_RESULTS_DIR_FORBIDDEN = ("..", "/", "\\")
 
 
 class MarkerExtractionError(ValueError):
@@ -76,10 +79,16 @@ def extract_markers(body: str, *, source_label: str = "issue body") -> Extracted
             f"{source_label}: missing required marker(s): {', '.join(missing)}"
         )
     assert m_key is not None and m_id is not None and m_dir is not None
+    results_dir = m_dir.group(1)
+    if any(tok in results_dir for tok in _RESULTS_DIR_FORBIDDEN):
+        raise MarkerExtractionError(
+            f"{source_label}: vulnhunt-results-dir contains a forbidden "
+            f"path token: {results_dir!r}"
+        )
     return ExtractedMarkers(
         vulnfix_key=m_key.group(1).lower(),
         finding_id=m_id.group(1).upper(),
-        results_dir=m_dir.group(1),
+        results_dir=results_dir,
     )
 
 
