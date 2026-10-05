@@ -22,7 +22,7 @@ from . import audit_extract as _audit_extract
 from . import issues_dedup, issues_extract, issues_fetch, issues_render, skill_version
 from ._github import api_base, extract_timestamp, parse_owner_repo
 from ._llm import CostStats
-from .auth import OAuthTokenManager, resolve_verify
+from .auth import TokenProvider, resolve_verify
 from .config import AgentConfig
 from .issues_extract import ExtractedReport, Finding
 from .issues_render import CleanScanContext
@@ -859,7 +859,7 @@ async def post_issues(
     report_url: str,
     target_repo_url: str,
     config: AgentConfig,
-    token_manager: OAuthTokenManager,
+    token_manager: TokenProvider,
     audit_writer: "_audit.AuditWriter | None" = None,
     audit_report_id: str = "",
     audit_repo_slug: str = "",

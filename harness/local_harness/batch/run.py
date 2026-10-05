@@ -9,8 +9,10 @@ Usage:
 
 import argparse
 import os
+import re
 import sys
 import time
+from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -24,12 +26,54 @@ from local_harness.config import (
 from local_harness.scan import clean_incomplete_results, has_valid_results, scan_targets, ts
 
 
+_GITHUB_COMPONENT_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def _repo_parts_from_url(url):
+    """Return the owner and repository from a supported GitHub clone URL.
+
+    Both URL-style remotes and the common git@github.com:owner/repo.git form
+    are accepted.
+    """
+    value = url.strip()
+    if "://" not in value:
+        host, separator, path = value.partition(":")
+        if not separator or host.rsplit("@", 1)[-1].casefold() != "github.com":
+            raise ValueError("expected a github.com repository URL")
+    else:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https", "ssh", "git"}:
+            raise ValueError("expected an HTTP(S), SSH, or git GitHub URL")
+        if (parsed.hostname or "").casefold() not in {"github.com", "www.github.com"}:
+            raise ValueError("expected a github.com repository URL")
+        path = parsed.path
+
+    parts = [part for part in path.rstrip("/").split("/") if part]
+    if len(parts) != 2:
+        raise ValueError("expected a GitHub repository URL ending in OWNER/REPOSITORY")
+
+    owner, repo = parts
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+
+    if any(
+        component in {"", ".", ".."} or not _GITHUB_COMPONENT_RE.fullmatch(component)
+        for component in (owner, repo)
+    ):
+        raise ValueError("repository path contains unsupported characters")
+    return owner, repo
+
+
 def repo_name_from_url(url):
     """Extract repo name from a GitHub URL."""
-    name = url.rstrip("/").split("/")[-1]
-    if name.endswith(".git"):
-        name = name[:-4]
-    return name
+    _, repo = _repo_parts_from_url(url)
+    return repo
+
+
+def repo_target_name_from_url(url):
+    """Return a stable, filesystem-safe batch target name for a GitHub URL."""
+    owner, repo = _repo_parts_from_url(url)
+    return f"{owner.casefold()}__{repo.casefold()}"
 
 
 def cmd_scan(args):
@@ -39,19 +83,34 @@ def cmd_scan(args):
         print("No URLs found in REPO_LIST.txt")
         sys.exit(1)
 
-    print(f"[{ts()}] Found {len(urls)} repos to process")
-    for i, url in enumerate(urls):
-        print(f"  [{i + 1}] {url}")
+    repo_targets = {}
+    clone_failures = []
+    duplicate_count = 0
+    for url in urls:
+        try:
+            target_name = repo_target_name_from_url(url)
+        except ValueError as exc:
+            clone_failures.append((url, f"invalid repository URL: {exc}"))
+            continue
+        if target_name in repo_targets:
+            duplicate_count += 1
+            continue
+        repo_targets[target_name] = url
+
+    print(f"[{ts()}] Found {len(urls)} repo list entries")
+    for i, (target_name, url) in enumerate(repo_targets.items()):
+        print(f"  [{i + 1}] {url} -> {target_name}")
+    if duplicate_count:
+        noun = "entry" if duplicate_count == 1 else "entries"
+        print(f"  Ignoring {duplicate_count} duplicate repo {noun}")
     print(flush=True)
 
     # Phase 1: Clone
     print(f"[{ts()}] Cloning repos (depth=1) ...")
     folders = []
-    clone_failures = []
 
-    for url in urls:
-        name = repo_name_from_url(url)
-        target_dir = os.path.join(BATCH_CLONE_BASE_DIR, name)
+    for target_name, url in repo_targets.items():
+        target_dir = os.path.join(BATCH_CLONE_BASE_DIR, target_name)
         target_dir, error = shallow_clone(url, target_dir, re_clone=args.re_clone)
         if error:
             print(f"  [{ts()}] CLONE FAILED: {url}\n           {error}", flush=True)

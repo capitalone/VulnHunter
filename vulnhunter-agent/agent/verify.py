@@ -52,7 +52,7 @@ from ._github_verify import (
     UserContentEdit,
     make_client,
 )
-from .auth import make_token_manager, resolve_verify
+from .auth import TokenProvider, make_token_manager, resolve_verify
 from .config import AgentConfig
 from . import audit as _audit
 from .repo_properties import RepoProperties
@@ -785,7 +785,7 @@ def _make_run_id(records: list[_FetchedRecord]) -> str:
 async def _run_skill(
     *,
     config: AgentConfig,
-    token_manager: OAuthTokenManager,
+    token_manager: TokenProvider,
     run_dir: Path,
     log_path: Path,
     target_repo: Path,

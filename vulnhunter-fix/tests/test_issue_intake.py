@@ -94,7 +94,7 @@ class TestExtractMarkers:
         body = (
             "<!--   vulnfix-key:    abcdef0123456789   -->\n"
             "<!--vulnhunt-finding-id: VULN-001-->\n"
-            "<!-- vulnhunt-results-dir: r -->\n"
+            "<!-- vulnhunt-results-dir: r_VULNHUNT_RESULTS_2026 -->\n"
         )
         assert extract_markers(body).vulnfix_key == "abcdef0123456789"
 
@@ -126,7 +126,7 @@ class TestExtractMarkers:
         body = (
             "<!-- vulnfix-key: abcdef0123456789 -->\n"
             "<!-- vulnhunt-finding-id: VULN-7 -->\n"
-            "<!-- vulnhunt-results-dir: r -->\n"
+            "<!-- vulnhunt-results-dir: r_VULNHUNT_RESULTS_2026 -->\n"
         )
         with pytest.raises(MarkerExtractionError):
             extract_markers(body)
@@ -135,7 +135,7 @@ class TestExtractMarkers:
         body = (
             "<!-- vulnfix-key: notenoughh -->\n"
             "<!-- vulnhunt-finding-id: VULN-001 -->\n"
-            "<!-- vulnhunt-results-dir: r -->\n"
+            "<!-- vulnhunt-results-dir: r_VULNHUNT_RESULTS_2026 -->\n"
         )
         with pytest.raises(MarkerExtractionError):
             extract_markers(body)
@@ -157,7 +157,7 @@ class TestExtractMarkers:
         # they're found even when scattered.
         body = (
             "Some narrative paragraph.\n\n"
-            "<!-- vulnhunt-results-dir: r -->\n\n"
+            "<!-- vulnhunt-results-dir: r_VULNHUNT_RESULTS_2026 -->\n\n"
             "More narrative.\n\n"
             "<!-- vulnfix-key: 0123456789abcdef -->\n\n"
             "Closing.\n\n"
@@ -166,6 +166,34 @@ class TestExtractMarkers:
         m = extract_markers(body)
         assert m.vulnfix_key == "0123456789abcdef"
         assert m.finding_id == "VULN-999"
+
+    @pytest.mark.parametrize(
+        "malicious",
+        [
+            "sess_../../../../var/tmp/pwn",
+            "x_VULNHUNT_RESULTS_../../evil",
+            "..x_VULNHUNT_RESULTS_2026",
+            "a/b_VULNHUNT_RESULTS_2026",
+            "a\\b_VULNHUNT_RESULTS_2026",
+        ],
+    )
+    def test_traversal_bearing_results_dir_is_rejected(self, malicious):
+        body = (
+            "<!-- vulnfix-key: 0123456789abcdef -->\n"
+            "<!-- vulnhunt-finding-id: VULN-001 -->\n"
+            f"<!-- vulnhunt-results-dir: {malicious} -->\n"
+        )
+        with pytest.raises(MarkerExtractionError):
+            extract_markers(body)
+
+    def test_results_dir_without_vulnhunt_results_rejected(self):
+        body = (
+            "<!-- vulnfix-key: 0123456789abcdef -->\n"
+            "<!-- vulnhunt-finding-id: VULN-001 -->\n"
+            "<!-- vulnhunt-results-dir: arbitrary-dirname -->\n"
+        )
+        with pytest.raises(MarkerExtractionError, match="vulnhunt-results-dir"):
+            extract_markers(body)
 
 
 # ---- reconstruct_original -------------------------------------------------
