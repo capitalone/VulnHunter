@@ -151,6 +151,69 @@ class TestAuditWriter:
         assert "secret-token" not in line
         assert "***" in line
 
+    def test_sensitive_key_values_masked(self, tmp_path: Path) -> None:
+        # Bare secret values carry no token shape for redact() to match, so
+        # they must be masked by key name — at any depth, including in lists.
+        w = _writer(tmp_path)
+        w.emit_audit(
+            {
+                "event_id": "x",
+                "client_secret": "SECRET-A",
+                "config": {
+                    "clientSecret": "SECRET-B",
+                    "scan_token": "SECRET-C",
+                    "anthropic-api-key": "SECRET-D",
+                    "Authorization": "SECRET-E",
+                },
+                "attempts": [{"password": "SECRET-F"}, {"refresh_token": "SECRET-G"}],
+            }
+        )
+        w.close()
+        obj = json.loads((tmp_path / "audit.jsonl").read_text())
+        assert "SECRET-" not in json.dumps(obj)
+        assert obj["client_secret"] == "***"
+        assert obj["config"]["Authorization"] == "***"
+        assert obj["attempts"][0]["password"] == "***"
+
+    def test_non_sensitive_token_and_key_fields_preserved(self, tmp_path: Path) -> None:
+        # Suffix/exact matching only: usage counters, endpoints, modes and
+        # identifier keys that merely contain "token"/"key"/"auth" survive.
+        fields = {
+            "input_tokens": 1200,
+            "cache_read_input_tokens": 7,
+            "token_endpoint": "https://oauth.example.com/token",
+            "token_budget_fraction": "0.5",
+            "broker_token_dir": "/var/run/broker",
+            "auth_mode": "bedrock_oauth",
+            "vulnfix_key": "abcdef0123456789",
+            "client_id": "cid",
+        }
+        w = _writer(tmp_path)
+        w.emit_audit({"event_id": "x", **fields})
+        w.close()
+        obj = json.loads((tmp_path / "audit.jsonl").read_text())
+        for k, v in fields.items():
+            assert obj[k] == v, k
+
+    def test_sensitive_key_non_string_values_recursed(self, tmp_path: Path) -> None:
+        # Only string values are masked by key; nested containers are still
+        # walked (and their own sensitive keys masked), empty strings and
+        # non-strings pass through unchanged.
+        w = _writer(tmp_path)
+        w.emit_audit(
+            {
+                "event_id": "x",
+                "token": {"access_token": "SECRET-H", "expires_in": 3600},
+                "client_secret": "",
+                "max_token": 5,
+            }
+        )
+        w.close()
+        obj = json.loads((tmp_path / "audit.jsonl").read_text())
+        assert obj["token"] == {"access_token": "***", "expires_in": 3600}
+        assert obj["client_secret"] == ""
+        assert obj["max_token"] == 5
+
     def test_stdout_mirror(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

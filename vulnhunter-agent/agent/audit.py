@@ -353,14 +353,39 @@ def _serialize(record: dict[str, Any]) -> str:
     return json.dumps(cleaned, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=False) + "\n"
 
 
+# CWE-532: redact() matches secrets by shape (``ghp_…``, ``Bearer …``), so a
+# bare secret string under a credential-named key (``{"client_secret": "x"}``)
+# has nothing to match. Keys are normalized (lowercased, ``_``/``-`` dropped)
+# and matched exactly or by suffix — never by substring, so usage fields such
+# as ``input_tokens`` / ``token_endpoint`` / ``vulnfix_key`` are left alone.
+_SENSITIVE_KEY_NAMES = frozenset({"authorization", "cookie", "setcookie"})
+_SENSITIVE_KEY_SUFFIXES = (
+    "secret", "password", "passwd", "token", "apikey", "privatekey", "secretkey",
+)
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    if not isinstance(key, str):
+        return False
+    norm = key.lower().replace("_", "").replace("-", "")
+    return norm in _SENSITIVE_KEY_NAMES or norm.endswith(_SENSITIVE_KEY_SUFFIXES)
+
+
 def _clean(value: Any) -> Any:
-    """Recursively drop keys with None values and redact strings."""
+    """Recursively drop keys with None values and redact strings.
+
+    String values under credential-named keys are masked outright, since
+    pattern-based redaction can't recognize a bare secret value.
+    """
     if isinstance(value, dict):
         out: dict[str, Any] = {}
         for k, v in value.items():
             if v is None:
                 continue
-            out[k] = _clean(v)
+            if isinstance(v, str) and v and _is_sensitive_key(k):
+                out[k] = "***"
+            else:
+                out[k] = _clean(v)
         return out
     if isinstance(value, (list, tuple)):
         return [_clean(v) for v in value]
