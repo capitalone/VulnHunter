@@ -248,3 +248,94 @@ def test_scan_status_ignores_fifo_log(tmp_path):
     os.mkfifo(str(repo / "batch_scan.log"))
     out = utils.scan_status(clone_base=str(base), log_filename="batch_scan.log")
     assert out["not_started"] == ["repoA"]
+
+
+# --- collect: only the owning repo's own, untracked, regular results ---
+
+import shutil as _shutil
+import subprocess as _subprocess
+
+import pytest
+
+
+def _results(repo, name, text="report"):
+    rd = repo / name
+    rd.mkdir()
+    (rd / "README.md").write_text(text)
+    return rd
+
+
+def test_collect_results_skips_results_dir_named_for_another_repo(tmp_path):
+    # repoB ships a dir named after repoA's results; it must neither be
+    # collected nor clobber repoA's genuine upload.
+    base = tmp_path / "repos"
+    base.mkdir()
+    repo_a = base / "repoA"
+    repo_a.mkdir()
+    _results(repo_a, "repoA_VULNHUNT_RESULTS_1", "genuine A")
+    repo_b = base / "repoB"
+    repo_b.mkdir()
+    _results(repo_b, "repoA_VULNHUNT_RESULTS_1", "forged by B")
+
+    upload = tmp_path / "up"
+    out = utils.collect_results(clone_base=str(base), upload_dir=str(upload))
+    assert (upload / "repoA_VULNHUNT_RESULTS_1" / "README.md").read_text() == "genuine A"
+    assert out["copied"] == ["repoA_VULNHUNT_RESULTS_1"]
+    assert "repoB" in out["missing"]
+
+
+def test_collect_results_never_overwrites_dst_from_other_repo(monkeypatch, tmp_path):
+    # Defense in depth: even if ownership matching were bypassed, a second
+    # repo must not replace a dst already produced in this run.
+    monkeypatch.setattr(utils, "_owns_results_dir", lambda repo, rdir: True)
+    base = tmp_path / "repos"
+    base.mkdir()
+    for name, text in (("repoA", "genuine A"), ("repoB", "forged by B")):
+        repo = base / name
+        repo.mkdir()
+        _results(repo, "repoA_VULNHUNT_RESULTS_1", text)
+
+    upload = tmp_path / "up"
+    out = utils.collect_results(clone_base=str(base), upload_dir=str(upload))
+    assert (upload / "repoA_VULNHUNT_RESULTS_1" / "README.md").read_text() == "genuine A"
+    assert out["copied"] == ["repoA_VULNHUNT_RESULTS_1"]
+
+
+@pytest.mark.skipif(_shutil.which("git") is None, reason="git not installed")
+def test_collect_results_skips_git_tracked_results_dir(tmp_path):
+    base = tmp_path / "repos"
+    base.mkdir()
+    repo = base / "repoA"
+    repo.mkdir()
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+    _subprocess.run([*git, "init", "-q"], cwd=repo, check=True)
+    _results(repo, "repoA_VULNHUNT_RESULTS_1", "attacker report")
+    _subprocess.run([*git, "add", "-A"], cwd=repo, check=True)
+    _subprocess.run([*git, "commit", "-q", "-m", "x"], cwd=repo, check=True)
+
+    upload = tmp_path / "up"
+    out = utils.collect_results(clone_base=str(base), upload_dir=str(upload))
+    assert out["copied"] == []
+    assert out["missing"] == ["repoA"]
+    assert not (upload / "repoA_VULNHUNT_RESULTS_1").exists()
+
+
+def test_collect_results_drops_fifo_and_special_files(tmp_path):
+    base = tmp_path / "repos"
+    base.mkdir()
+    repo = base / "repoA"
+    repo.mkdir()
+    rd = _results(repo, "repoA_VULNHUNT_RESULTS_1")
+    sub = rd / "tests"
+    sub.mkdir()
+    (sub / "t.py").write_text("ok")
+    os.mkfifo(str(rd / "pipe"))
+    os.mkfifo(str(sub / "nested_pipe"))
+
+    upload = tmp_path / "up"
+    out = utils.collect_results(clone_base=str(base), upload_dir=str(upload))  # must not raise/hang
+    dst = upload / "repoA_VULNHUNT_RESULTS_1"
+    assert out["copied"] == ["repoA_VULNHUNT_RESULTS_1"]
+    assert (dst / "README.md").exists() and (dst / "tests" / "t.py").exists()
+    assert not os.path.lexists(str(dst / "pipe"))
+    assert not os.path.lexists(str(dst / "tests" / "nested_pipe"))
