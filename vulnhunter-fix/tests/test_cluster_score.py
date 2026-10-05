@@ -158,6 +158,28 @@ class TestAnnotateClustersJson:
             "Other clusters",
         ]
 
+    def test_duplicate_names_keep_their_own_members(self):
+        """Two clusters can legitimately share a name (the "Other clusters"
+        overflow slot, parse_issues.md Step 3(c)); each output entry must
+        carry its own members/severity_breakdown, not a same-named sibling's."""
+        payload = {
+            "clusters": [
+                {"name": "Other clusters", "members": [{"vuln": "VULN-LOW"}],
+                 "severity_breakdown": {"Low": 1}},
+                {"name": "Other clusters",
+                 "members": [{"vuln": "VULN-A"}, {"vuln": "VULN-B"}],
+                 "severity_breakdown": {"Critical": 2}},
+            ]
+        }
+        out = annotate_clusters_json(payload)
+        assert [c["score"] for c in out["clusters"]] == [16, 1]
+        assert out["clusters"][0]["members"] == [
+            {"vuln": "VULN-A"}, {"vuln": "VULN-B"},
+        ]
+        assert out["clusters"][0]["severity_breakdown"] == {"Critical": 2}
+        assert out["clusters"][1]["members"] == [{"vuln": "VULN-LOW"}]
+        assert out["clusters"][1]["severity_breakdown"] == {"Low": 1}
+
 
 class TestCli:
     def test_round_trip_via_file(self, tmp_path):
