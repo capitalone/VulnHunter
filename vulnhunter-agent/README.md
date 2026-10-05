@@ -66,12 +66,53 @@ Settings load from a TOML file (`--config`, then `$VULNHUNT_AGENT_CONFIG`, then
 | `api_key` *(default)* | Direct Anthropic API | `[anthropic].api_key` or the standard `ANTHROPIC_API_KEY` env var |
 | `bedrock_oauth` | Routes through an AWS Bedrock proxy fronted by an OAuth2 client-credentials token endpoint | `[anthropic].bedrock_base_url` + the `[oauth]` block (`token_endpoint`, `client_id`, `client_secret`) |
 | `bedrock_sigv4` | Calls Amazon Bedrock directly with SigV4 request signing via the standard AWS credential chain — no proxy, no bearer token | `[anthropic].aws_region`; optionally `aws_profile` (named profile) and `bedrock_base_url` (VPC/custom endpoint). No `[oauth]` block. |
+| `orcarouter` | Routes the bundled Claude Code CLI at [OrcaRouter](https://www.orcarouter.ai), an OpenAI-compatible AI gateway. The credential is an OrcaRouter API key (`sk-orca-…`) | The `[orcarouter]` block; a credential from either connect entry below |
 
 `bedrock_oauth` exists for environments that front Claude with a Bedrock proxy and mint
 short-lived bearer tokens. `bedrock_sigv4` is for AWS-native setups that call Bedrock
 directly (use a cross-region inference-profile model ID, e.g. `us.anthropic.claude-...`);
 credentials resolve from the usual AWS chain — env vars, shared config/credentials file,
 SSO, or an instance/task role. Most users want the default `api_key` mode.
+
+### OrcaRouter (`auth_mode = "orcarouter"`)
+
+OrcaRouter is an OpenAI-compatible AI gateway that routes many providers behind one
+endpoint. Set `anthropic.auth_mode = "orcarouter"` and choose a model by its gateway
+ID (e.g. `deepseek/deepseek-v4-pro`). There are **two independent authentication
+entries**, and both produce the same kind of OrcaRouter API key:
+
+```bash
+# Option 1 — paste an existing key (sk-orca-…)
+python -m agent --mode=orcarouter --orcarouter-action=store-api-key
+
+# Option 2 — sign in with an OrcaRouter account (OAuth 2.0 + PKCE)
+python -m agent --mode=orcarouter --orcarouter-action=login
+
+python -m agent --mode=orcarouter --orcarouter-action=status   # what is stored
+python -m agent --mode=orcarouter --orcarouter-action=clear    # remove it
+python -m agent --mode=orcarouter --orcarouter-action=models --capability chat
+```
+
+The OAuth login (`[orcarouter].flow`) supports Flow A — a loopback redirect, chosen
+because the agent runs on a machine where `127.0.0.1:<port>` is bindable — and Flow B —
+an out-of-band code, for hosts that cannot listen (locked-down or remote machines).
+S256 PKCE is used in both; there is no client secret. The credential is stored 0o600 in
+`~/.vulnhunter/orcarouter.json` and **reused across restarts** — it is a durable key, not
+a refresh token, so the agent never re-authorizes on every launch (OrcaRouter caps
+PKCE key issuance at 10 per user per 24 hours) and never attempts a fake refresh. If the
+relay rejects the key (401/403), the exact stored generation is marked for
+reauthentication; run `login` or `store-api-key` again to replace it.
+
+**Origins.** Authentication and inference use different origins:
+`https://www.orcarouter.ai` (authorize `/auth`, exchange `/api/v1/auth/keys`) and
+`https://api.orcarouter.ai/v1` (inference and the model catalog). Point a self-hosted
+deployment at its own origin with `[orcarouter].base_url` (shared) or the explicit
+`ORCA_AUTH_BASE_URL` / `ORCA_API_BASE_URL` overrides (env wins over TOML).
+
+**Models.** The model list is discovered live from `GET {api_base}/models` and filtered
+per capability. A small verified seed is used only when discovery fails, and the result
+is reported as degraded rather than falling back to free text. The `harness/` tools
+share the same `claude` CLI and honor the same `ORCA_*` environment variables.
 
 ### Other sections (abridged)
 

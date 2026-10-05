@@ -1,11 +1,12 @@
 """Build the Claude Code settings JSON the SDK passes through to the CLI.
 
-Routes Anthropic calls one of three ways: directly to the Anthropic API
+Routes Anthropic calls one of four ways: directly to the Anthropic API
 (``api_key`` mode), through an AWS Bedrock proxy fronted by an OAuth bearer
-token (``bedrock_oauth`` mode), or directly to Amazon Bedrock with SigV4
+token (``bedrock_oauth`` mode), directly to Amazon Bedrock with SigV4
 request signing via the standard AWS credential chain (``bedrock_sigv4``
-mode). It also blanks out inherited HTTP proxies, applies an OS-level
-sandbox, and (optionally) enables OTLP telemetry.
+mode), or at the OrcaRouter gateway (``orcarouter`` mode). It also blanks out
+inherited HTTP proxies, applies an OS-level sandbox, and (optionally) enables
+OTLP telemetry.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import re
 from urllib.parse import urlparse
 
 from .config import AgentConfig
+from .orcarouter import cli_base_url
 
 # Match the 1-million-context variant of a Claude model. Used to pick a
 # higher autocompact threshold (more headroom) when the user opts into the
@@ -55,6 +57,10 @@ def _anthropic_host(cfg: AgentConfig) -> str:
             return urlparse(cfg.anthropic.bedrock_base_url).hostname or ""
         region = cfg.anthropic.aws_region
         return f"bedrock-runtime.{region}.amazonaws.com" if region else ""
+    if cfg.anthropic.auth_mode == "orcarouter":
+        # The bundled CLI talks to the OrcaRouter inference origin (derived
+        # from the configured API base, never from the auth origin).
+        return urlparse(cli_base_url(cfg.orcarouter.api_base_url)).hostname or ""
     return "api.anthropic.com"
 
 
@@ -87,6 +93,17 @@ def _sandbox_allowed_domains(cfg: AgentConfig) -> list[str]:
     """
     host = _anthropic_host(cfg)
     domains = [host] if host else []
+    if cfg.anthropic.auth_mode == "orcarouter":
+        # The agent itself (outside the sandboxed CLI) fetches the live model
+        # catalog and runs the OAuth exchange against the OrcaRouter auth
+        # origin. Allow-list both configured origins so an HTTPS self-hosted
+        # deployment keeps working; loopback HTTP dev origins are permitted
+        # by the network policy validator but not added here.
+        for origin in (cfg.orcarouter.api_base_url, cfg.orcarouter.auth_base_url):
+            parsed = urlparse(origin)
+            if parsed.scheme == "https" and parsed.hostname:
+                if parsed.hostname not in domains:
+                    domains.append(parsed.hostname)
     if cfg.anthropic.auth_mode == "bedrock_sigv4":
         region = cfg.anthropic.aws_region
         if region:
@@ -175,6 +192,18 @@ def build_claude_settings(
         # Blank → default credential chain.
         if cfg.anthropic.aws_profile:
             env["AWS_PROFILE"] = cfg.anthropic.aws_profile
+    elif cfg.anthropic.auth_mode == "orcarouter":
+        # Route the bundled CLI at the OrcaRouter gateway. The credential is
+        # an ordinary OrcaRouter API key (from either connect adapter) and
+        # rides in as ANTHROPIC_API_KEY. ANTHROPIC_BASE_URL is the API origin
+        # WITHOUT the trailing /v1 — the CLI appends the version segment
+        # itself, so pointing it at .../v1 would double it and 404.
+        env.update(
+            {
+                "ANTHROPIC_BASE_URL": cli_base_url(cfg.orcarouter.api_base_url),
+                "ANTHROPIC_API_KEY": auth_token or cfg.orcarouter.api_key,
+            }
+        )
     else:
         # Direct Anthropic API. The API key rides in as auth_token (from the
         # token provider) or falls back to the configured value.

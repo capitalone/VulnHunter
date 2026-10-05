@@ -21,7 +21,7 @@ _QUERY_TOKEN_RE = re.compile(r"(?i)([?&](?:access_token|token)=)([^&\s]+)")
 # Raw token prefixes GitHub / Anthropic emit. Prefix is preserved so an
 # operator can still tell what kind of token leaked; the secret body is masked.
 _RAW_TOKEN_RE = re.compile(
-    r"(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|sk-ant-)[A-Za-z0-9_-]+"
+    r"(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|sk-ant-|sk-orca-)[A-Za-z0-9_-]+"
 )
 _FORM_SECRET_RE = re.compile(
     r"(?i)(client[_-]?secret[\"']?[ \t]*(?:\[\d+\])?[ \t]*[=:][ \t]*\[?[ \t]*)"
@@ -39,8 +39,9 @@ def redact(text: str) -> str:
     2. ``Authorization: Bearer/token <secret>`` header values.
     3. ``?access_token=`` / ``&token=`` query parameters.
     4. Known raw token prefixes (``ghp_``, ``gho_``, ``ghu_``, ``ghs_``,
-       ``ghr_``, ``github_pat_``, ``sk-ant-``) — the prefix is preserved so
-       the token kind stays identifiable while the secret body is masked.
+       ``ghr_``, ``github_pat_``, ``sk-ant-``, ``sk-orca-``) — the prefix is
+       preserved so the token kind stays identifiable while the secret body
+       is masked.
     5. ``client_secret`` values in form-encoded, JSON, and config formats
        (``client_secret``, ``client-secret``, ``clientSecret``).
     """

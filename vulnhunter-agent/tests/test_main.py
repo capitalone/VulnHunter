@@ -540,6 +540,7 @@ def _stub_main_environment_for_args(
         IssuesConfig,
         LoggingConfig,
         OAuthConfig,
+        OrcaRouterConfig,
         PublishConfig,
         SandboxConfig,
         ScanConfig,
@@ -554,6 +555,7 @@ def _stub_main_environment_for_args(
                 aws_region="us-east-1",
                 model="claude-opus-4-8",
             ),
+            orcarouter=OrcaRouterConfig(),
             oauth=OAuthConfig(
                 token_endpoint="https://oauth.example.com/token",
                 client_id="x",
@@ -1218,7 +1220,7 @@ class TestModeDispatchAndFlagRejection:
         assert excinfo.value.code == 2
         err = capsys.readouterr().err
         assert "--mode is required" in err
-        assert "scan or verify" in err
+        assert "scan, verify, or orcarouter" in err
 
     def test_verify_mode_dispatches_to_verify_amain(
         self,
@@ -1252,6 +1254,7 @@ class TestModeDispatchAndFlagRejection:
             IssuesConfig,
             LoggingConfig,
             OAuthConfig,
+            OrcaRouterConfig,
             PublishConfig,
             SandboxConfig,
             ScanConfig,
@@ -1266,6 +1269,7 @@ class TestModeDispatchAndFlagRejection:
                 aws_region="us-east-1",
                 model="claude-opus-4-8",
             ),
+            orcarouter=OrcaRouterConfig(),
             oauth=OAuthConfig(
                 token_endpoint="https://o.example",
                 client_id="x",

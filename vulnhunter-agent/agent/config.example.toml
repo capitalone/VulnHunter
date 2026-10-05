@@ -36,6 +36,12 @@
 #                     credentials (instance/task roles) are NOT reachable —
 #                     widen the sandbox network allow-list or disable the
 #                     sandbox for those.
+#   "orcarouter"    — route the bundled Claude Code CLI at OrcaRouter, an
+#                     OpenAI-compatible AI gateway that routes many providers
+#                     behind one endpoint. Credential is an OrcaRouter API key
+#                     (sk-orca-...) obtained either by pasting one or by an
+#                     OAuth 2.0 + PKCE browser login — see [orcarouter] below.
+#                     Model IDs are the gateway's vendor/model namespaced IDs.
 auth_mode = "api_key"
 api_key = ""
 # Default model. Override per-invocation with --model.
@@ -49,6 +55,43 @@ bedrock_base_url = ""
 aws_region = "us-east-1"
 # bedrock_sigv4 mode only: optional named AWS profile. Blank → default chain.
 aws_profile = ""
+
+[orcarouter]
+# auth_mode = "orcarouter" only. OrcaRouter is an OpenAI-compatible AI
+# gateway. Two public origins are involved and they are NOT interchangeable:
+# authentication lives on www.orcarouter.ai, inference + model catalog on
+# api.orcarouter.ai. Never derive one from the other.
+#
+# Get a credential with either entry point (both are first-class):
+#   python -m agent --mode=orcarouter --orcarouter-action=store-api-key
+#   python -m agent --mode=orcarouter --orcarouter-action=login
+# Check or clear what is stored:
+#   python -m agent --mode=orcarouter --orcarouter-action=status
+#   python -m agent --mode=orcarouter --orcarouter-action=clear
+# Inspect the live model catalog (no scan required):
+#   python -m agent --mode=orcarouter --orcarouter-action=models --capability chat
+#
+# The credential is stored 0o600 in ~/.vulnhunter/orcarouter.json (override
+# with credentials_file). It is a durable API key — there is no refresh
+# grant. A relay 401/403 marks the exact stored generation for reauth.
+connect = "api_key"          # "api_key" (paste a key) | "oauth" (PKCE login)
+flow = "a"                    # "a" loopback redirect | "b" out-of-band code
+app_name = "VulnHunter Agent" # shown on the consent screen
+scope = "api"                 # requested grant; the granted scope is read back
+auth_base_url = "https://www.orcarouter.ai"
+api_base_url = "https://api.orcarouter.ai/v1"
+# Self-hosted deployments: set base_url to a single shared origin, or the two
+# explicit overrides (which win). ORCA_BASE_URL / ORCA_AUTH_BASE_URL /
+# ORCA_API_BASE_URL do the same via env, and env wins over TOML.
+# base_url = ""
+# client_id = ""
+# Optional literal key (prefer the store or the ORCA_API_KEY env var).
+api_key = ""
+login_timeout_seconds = 300
+http_timeout_seconds = 30
+catalog_timeout_seconds = 20
+catalog_enabled = true
+catalog_limit = 500
 
 [oauth]
 # bedrock_oauth mode only: OAuth2 client-credentials endpoint that mints the

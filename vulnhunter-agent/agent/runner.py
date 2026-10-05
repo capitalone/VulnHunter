@@ -467,7 +467,15 @@ _CONTINUATION_PROMPT = (
 
 
 class AuthRejectedError(RuntimeError):
-    """The Bedrock proxy rejected the bearer token; retrying won't help."""
+    """The provider rejected the credential; retrying won't help.
+
+    Raised repeatedly by the upstream on 401 (or a typed 403 credential /
+    model-access rejection). For the OrcaRouter provider this is a TERMINAL
+    reauthentication requirement: the exact credential generation that made
+    the rejected request is flagged and the stored key is kept, so a new
+    login simply replaces it. No refresh is attempted — an OrcaRouter key is
+    a durable grant, not a refresh token.
+    """
 
 
 class RateLimitError(RuntimeError):
@@ -1094,12 +1102,17 @@ async def _run_scan_session(
                     if _is_auth_failure(message):
                         consecutive_auth_failures += 1
                         if consecutive_auth_failures >= _MAX_CONSECUTIVE_AUTH_FAILURES:
+                            _mark_credential_rejected(config)
                             raise AuthRejectedError(
-                                f"Bedrock proxy rejected the bearer token "
+                                f"The provider rejected the credential "
                                 f"{consecutive_auth_failures} consecutive times "
-                                "(error_status=401 authentication_failed). The OAuth "
-                                "client likely lacks Bedrock access — check the "
-                                "JWT's aud/scope claims against a known-working client."
+                                "(error_status=401 authentication_failed, or a "
+                                "typed 403 credential/model-access rejection). "
+                                "For bedrock_oauth the OAuth client likely lacks "
+                                "Bedrock access — check the JWT's aud/scope claims "
+                                "against a known-working client. For orcarouter the "
+                                "key is revoked or lacks access to the selected "
+                                "model — sign in again or paste a new API key."
                             )
                     else:
                         consecutive_auth_failures = 0
@@ -1229,6 +1242,63 @@ def _is_auth_failure(message: SystemMessage) -> bool:
     return (
         data.get("error_status") == 401
         or str(data.get("error", "")).lower() == "authentication_failed"
+        or _is_credential_rejection(message)
+    )
+
+
+def _mark_credential_rejected(config: AgentConfig) -> None:
+    """Terminally mark the exact rejected OrcaRouter credential generation.
+
+    Called once we have decided the upstream is rejecting our credential.
+    Generation-safe: only the stored record whose key and generation exactly
+    match the credential currently in use is flagged, so a late failure from
+    an old request can never mark a freshly reauthorized credential broken.
+    No-op for every other auth mode.
+    """
+    if config.anthropic.auth_mode != "orcarouter":
+        return
+    try:
+        from .orcarouter import ConnectCredentialProvider
+
+        provider = ConnectCredentialProvider(config.orcarouter, tls=config.tls)
+        result = provider.resolve()
+        if provider.note_rejection(
+            api_key=result.api_key, generation=result.generation
+        ):
+            logger.error(
+                "OrcaRouter credential (generation %d, %s) was rejected by the "
+                "relay; it now requires reauthentication. Sign in again or paste "
+                "a new API key.",
+                result.generation,
+                "login" if result.method.value == "oauth" else "api key",
+            )
+    except Exception:  # noqa: BLE001 - marking is best-effort, never masks the real error
+        logger.debug("Could not mark OrcaRouter credential rejected", exc_info=True)
+
+
+def _is_credential_rejection(message: SystemMessage) -> bool:
+    """True if a SystemMessage reports a terminal credential/access rejection.
+
+    A typed 403 whose error text is about authentication or model access is
+    as terminal as a 401: the credential (or its model scope) is dead and
+    retrying cannot help. Adopting this PR's OrcaRouter provider, the relay
+    answers 403 ``model_access_denied`` for a key that lacks access to a
+    model and 401 for a revoked key — both must mark the credential for
+    reauthentication instead of being retried or surfaced as a crash.
+
+    A typed 401 is handled by ``_is_auth_failure`` directly; this helper adds
+    the typed-403 case. Only a typed integer 403 triggers it, so an untyped
+    system notice is never misread as a credential failure.
+    """
+    data = getattr(message, "data", None)
+    if not isinstance(data, dict):
+        return False
+    if data.get("error_status") != 403:
+        return False
+    text = f"{data.get('error', '')} {data.get('message', '')}".lower()
+    return any(
+        marker in text
+        for marker in ("authentication", "unauthorized", "credential", "model_access")
     )
 
 

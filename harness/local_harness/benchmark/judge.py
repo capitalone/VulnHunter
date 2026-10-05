@@ -13,6 +13,7 @@ from local_harness.config import (
     JUDGE_TIMEOUT,
     MODEL,
 )
+from local_harness.orcarouter_env import claude_env
 
 JUDGE_SYSTEM_PROMPT = """You are a security finding comparator. Your job is to determine whether a vulnerability scanner's output detected specific known vulnerabilities.
 
@@ -95,6 +96,7 @@ For EACH benchmark finding above, determine if the scanner detected it. Respond 
                  "--model", model,
                  "--system-prompt", JUDGE_SYSTEM_PROMPT],
                 capture_output=True, text=True, timeout=JUDGE_TIMEOUT,
+                env=claude_env(),
             )
         except subprocess.TimeoutExpired:
             return [{"finding_id": f["finding_id"], "detected": None,

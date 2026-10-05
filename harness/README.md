@@ -19,6 +19,25 @@ has no other runtime dependencies.
 Set the scanning/judging model once in `local_harness/config.py` (the `MODEL`
 constant) to switch models across every workflow.
 
+### Routing at OrcaRouter
+
+[OrcaRouter](https://www.orcarouter.ai) is an OpenAI-compatible AI gateway that
+routes many providers behind one endpoint. To send the harness's `claude`
+subprocesses through it, export the same `ORCA_*` variables the runtime agent
+honors and the harness injects them into each `claude` invocation:
+
+```bash
+export ORCA_API_KEY=sk-orca-...                       # or ORCA_BASE_URL for self-hosted
+export ORCA_API_BASE_URL=https://api.orcarouter.ai/v1
+python -m local_harness.batch.run scan
+```
+
+There is no `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY` for you to set by hand and
+no OAuth flow here: the harness is a credential *consumer*. Obtain the key with
+`python -m agent --mode=orcarouter login` (or `--orcarouter-action=store-api-key`)
+in `vulnhunter-agent/`, or export `ORCA_API_KEY` directly. With no `ORCA_*`
+variable set, the harness inherits the ambient environment exactly as before.
+
 ## What's inside
 
 | Path | Purpose |

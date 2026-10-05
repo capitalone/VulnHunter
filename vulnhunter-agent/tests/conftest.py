@@ -20,6 +20,7 @@ from agent.config import (
     IssuesConfig,
     LoggingConfig,
     OAuthConfig,
+    OrcaRouterConfig,
     PublishConfig,
     RepoPropertiesConfig,
     SandboxConfig,
@@ -38,12 +39,14 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Strip env vars that would otherwise leak into the test process.
 
     - VULNHUNT_*: agent config, must start from a known state.
+    - ORCA_* / ORCAROUTER_*: OrcaRouter provider config, including a real
+      credential that must never leak into a test's credential resolution.
     - *_PROXY / NO_PROXY: httpx auto-picks these up; if the dev shell has
       a SOCKS proxy configured, every respx-mocked test would try to
       route through it and fail with "socksio not installed".
     """
     for key in list(os.environ):
-        if key.startswith("VULNHUNT_") or key.upper() in (
+        if key.startswith(("VULNHUNT_", "ORCA_", "ORCAROUTER_")) or key.upper() in (
             "HTTP_PROXY",
             "HTTPS_PROXY",
             "ALL_PROXY",
@@ -117,6 +120,7 @@ def _build_agent_config(**overrides: Any) -> AgentConfig:
             default_lifetime_seconds=3600,
             http_timeout_seconds=30,
         ),
+        "orcarouter": OrcaRouterConfig(),
         "tls": TLSConfig(ssl_cert_path=""),
         "sandbox": SandboxConfig(
             enabled=True,

@@ -42,7 +42,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -97,21 +99,26 @@ def _build_parser() -> argparse.ArgumentParser:
         # deliberate breaking change from the pre-verify CLI.
         required=False,
         default=None,
-        choices=("scan", "verify"),
+        choices=("scan", "verify", "orcarouter"),
         help=(
             "Required. 'scan' runs the existing scanner against a repo URL. "
-            "'verify' runs the fix-verify agent against one or more issue URLs."
+            "'verify' runs the fix-verify agent against one or more issue URLs. "
+            "'orcarouter' manages the OrcaRouter credential (status/login/"
+            "store-api-key/clear) and lists the live model catalog; use "
+            "--orcarouter-action to choose."
         ),
     )
     # In scan mode this is the repo URL (exactly one). In verify mode this
-    # is one or more issue URLs. We use nargs="+" and validate the count
-    # in main() once we know which mode is in effect.
+    # is one or more issue URLs. orcarouter mode takes no positional. We use
+    # nargs="*" and validate the count in main() once we know which mode is
+    # in effect.
     parser.add_argument(
         "targets",
-        nargs="+",
+        nargs="*",
         help=(
             "Positional argument(s). In --mode=scan: exactly one git repo URL. "
-            "In --mode=verify: one or more full GitHub issue URLs."
+            "In --mode=verify: one or more full GitHub issue URLs. In "
+            "--mode=orcarouter: none."
         ),
     )
     parser.add_argument(
@@ -269,6 +276,36 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-reopen",
         action="store_true",
         help="Post comments but don't reopen issues on non-FIXED verdicts.",
+    )
+
+    # ---- orcarouter-mode flags ------------------------------------------
+
+    orca_section = parser.add_argument_group("orcarouter-mode options")
+    orca_section.add_argument(
+        "--api-key",
+        default=None,
+        help="OrcaRouter API key (sk-orca-...) for --mode=orcarouter "
+        "--orcarouter-action=store-api-key. Prefer the ORCA_API_KEY env var or "
+        "an interactive prompt: a literal flag value is visible in the process "
+        "list.",
+    )
+    orca_section.add_argument(
+        "--orcarouter-action",
+        default="status",
+        choices=("status", "login", "store-api-key", "clear", "models"),
+        help="What --mode=orcarouter should do (default: status).",
+    )
+    orca_section.add_argument(
+        "--capability",
+        default="chat",
+        choices=("chat", "image_input", "audio_input", "video_input", "embedding",
+                 "image_generation", "video_generation", "rerank"),
+        help="Capability filter for --orcarouter-action=models (default: chat).",
+    )
+    orca_section.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON for --mode=orcarouter.",
     )
 
     # ---- shared logging --------------------------------------------------
@@ -1216,13 +1253,182 @@ def _repo_slug_for_audit(
 
 
 
+def _run_orcarouter_command(args) -> int:
+    """``--mode=orcarouter`` — manage the credential and inspect the catalog.
+
+    Two explicit, discoverable authentication entries (``store-api-key`` for a
+    pasted key and ``login`` for OAuth 2.0 + PKCE) plus ``status``/``clear``
+    so both choices can be used and reversed, and ``models`` to inspect the
+    live capability-filtered catalog without running a scan.
+    """
+    from .config import load_orcarouter_config
+    from .orcarouter import (
+        ConnectCredentialProvider,
+        ModelCapability,
+        discover_catalog,
+    )
+
+    config = load_orcarouter_config(args.config)
+    provider = ConnectCredentialProvider(config)
+
+    action = args.orcarouter_action
+
+    if action == "store-api-key":
+        key = (args.api_key or "").strip()
+        if not key:
+            key = os.environ.get("ORCA_API_KEY", "") or os.environ.get(
+                "ORCAROUTER_API_KEY", ""
+            )
+        if not key:
+            # Interactive prompt keeps the key out of the process list/argv.
+            import getpass
+
+            key = getpass.getpass("OrcaRouter API key (sk-orca-...): ").strip()
+        result = provider.store_api_key(key)
+        _emit_orca(
+            args,
+            {"status": "stored", "method": "api_key", "masked_key": _mask(result.api_key)},
+            f"Stored OrcaRouter API key {_mask(result.api_key)}.",
+        )
+        return 0
+
+    if action == "login":
+        result = provider.connect_oauth()
+        _emit_orca(
+            args,
+            {"status": "connected", "method": "oauth", "scope": result.scope,
+             "masked_key": _mask(result.api_key)},
+            f"OrcaRouter login complete. Stored key {_mask(result.api_key)} "
+            f"(granted scope: {result.scope}).",
+        )
+        return 0
+
+    if action == "clear":
+        provider.clear()
+        _emit_orca(args, {"status": "cleared"}, "Removed the stored OrcaRouter credential.")
+        return 0
+
+    if action == "models":
+        capability = ModelCapability(args.capability)
+        try:
+            api_key = provider.resolve().api_key
+        except Exception:  # noqa: BLE001 - catalog is public; list without auth
+            api_key = ""
+        catalog = discover_catalog(config, api_key, capability=args.capability)
+        models = catalog.for_capability(capability)
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "source": catalog.source,
+                        "degraded": catalog.degraded,
+                        "error": catalog.error,
+                        "capability": capability.value,
+                        "count": len(models),
+                        "models": [
+                            {
+                                "id": m.id,
+                                "context_length": m.context_length,
+                                "input_modalities": list(m.input_modalities),
+                                "endpoint_types": list(m.endpoint_types),
+                                "source": m.source,
+                            }
+                            for m in models
+                        ],
+                    },
+                    indent=2,
+                )
+            )
+            return 0
+        note = f" (DEGRADED: {catalog.error})" if catalog.degraded else ""
+        print(
+            f"OrcaRouter catalog [{catalog.source}]{note} — "
+            f"{len(models)} model(s) for capability '{capability.value}':"
+        )
+        for m in models:
+            modalities = ",".join(m.input_modalities) or "?"
+            print(f"  {m.id}  [input: {modalities}]")
+
+        # If the caller named a model (--model), verify it is still in the
+        # filtered set. An incompatible selection must not be silently kept:
+        # we say so and fail, so it is re-chosen rather than sent blind.
+        selected = (args.model or "").strip()
+        if selected and not any(m.id == selected for m in models):
+            print(
+                f"ERROR: the selected model '{selected}' is not available for "
+                f"capability '{capability.value}'"
+                + (f" ({catalog.error})" if catalog.degraded else "")
+                + ". Choose a model from the list above.",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
+
+    # status (default)
+    try:
+        result = provider.resolve()
+    except Exception as exc:  # noqa: BLE001 - report, don't crash on status
+        _emit_orca(
+            args,
+            {"status": "no-credential", "reason": str(exc)},
+            f"No usable OrcaRouter credential: {exc}",
+        )
+        return 0
+    _emit_orca(
+        args,
+        {
+            "status": "ok",
+            "method": result.method.value,
+            "source": result.source,
+            "scope": result.scope,
+            "generation": result.generation,
+            "masked_key": _mask(result.api_key),
+            "needs_reauth": result.needs_reauth,
+        },
+        f"OrcaRouter credential: {_mask(result.api_key)} "
+        f"(method: {result.method.value}, source: {result.source}, "
+        f"generation: {result.generation}).",
+    )
+    return 0
+
+
+def _mask(key: str) -> str:
+    """Mask a credential for display (never the full secret)."""
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return "***"
+    return f"{key[:8]}...{key[-4:]}"
+
+
+def _emit_orca(args, payload: dict, human: str) -> None:
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(human)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
     # ---- --mode is required (friendlier than argparse's default) ---------
     if args.mode is None:
-        parser.error("--mode is required; choose scan or verify")
+        parser.error("--mode is required; choose scan, verify, or orcarouter")
+
+    if args.mode == "orcarouter":
+        if args.targets:
+            parser.error("--mode=orcarouter takes no positional arguments.")
+        _configure_logging(args.log_level, args.verbose)
+        set_verbosity(args.verbose)
+        try:
+            return _run_orcarouter_command(args)
+        except KeyboardInterrupt:
+            logging.warning("Interrupted by user")
+            return 130
+        except Exception as exc:  # noqa: BLE001
+            logging.error("%s", exc)
+            return 1
 
     # ---- Mode-specific positional + flag validation -----------------------
     if args.mode == "scan":

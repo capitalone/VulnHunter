@@ -27,6 +27,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from local_harness.config import BENCHMARK_DIR, MODEL, REPO_ROOT, RESULTS_DIR, STATE_FILE, atomic_write_json
+from local_harness.orcarouter_env import claude_env
 
 PHASE_TO_PROMPT = {
     "phase1": ["skill/phases/phase1_recon.md"],
@@ -277,6 +278,7 @@ def invoke_diagnostic(finding, phase_key, evidence, results_dir, repo_dir):
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=1200,
+            env=claude_env(),
         )
     except subprocess.TimeoutExpired:
         elapsed = time.time() - start

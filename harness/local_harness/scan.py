@@ -21,6 +21,7 @@ from .config import (
     SCAN_TIMEOUT,
     SKILLS_DIR,
 )
+from .orcarouter_env import claude_env
 
 # The result of scanning one folder. A namedtuple (rather than a bare 7-tuple)
 # so consumers can use attribute access and a field reorder can't silently
@@ -221,6 +222,9 @@ def scan_folder(folder_path, log_file=None, readonly=False):
         stderr=subprocess.STDOUT,
         text=True,
         cwd=folder_path,
+        # Route at OrcaRouter when configured; None inherits the parent env
+        # unchanged, so the default behavior is untouched.
+        env=claude_env(),
     )
 
     event_count = 0

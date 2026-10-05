@@ -53,6 +53,13 @@ class AnthropicConfig:
     #                     are not allow-listed, so container/instance-role
     #                     credentials require widening the sandbox network
     #                     allow-list or disabling the sandbox.
+    #   "orcarouter"    — route the bundled CLI at OrcaRouter's
+    #                     OpenAI/Anthropic-compatible gateway (see
+    #                     [orcarouter]). The credential is an OrcaRouter API
+    #                     key ("sk-orca-...") obtained either by pasting one or
+    #                     by an OAuth 2.0 + PKCE login; it is delivered to the
+    #                     CLI as ANTHROPIC_API_KEY against
+    #                     [orcarouter].api_base_url.
     model: str
     auth_mode: str = "api_key"
     api_key: str = ""
@@ -62,6 +69,64 @@ class AnthropicConfig:
     # config/credentials file. Blank → the CLI uses the default credential
     # chain (AWS_* env vars, default profile, SSO, container/instance role).
     aws_profile: str = ""
+
+
+@dataclass(frozen=True)
+class OrcaRouterConfig:
+    """Settings for the first-class OrcaRouter provider (``auth_mode``).
+
+    OrcaRouter is an OpenAI-compatible AI gateway that routes many
+    providers behind one endpoint. Two public origins are involved and
+    they are deliberately NOT interchangeable:
+
+    - **authentication** (``auth_base_url``) — the consent screen and the
+      code-for-key exchange. Default ``https://www.orcarouter.ai``.
+    - **inference + model catalog** (``api_base_url``) — defaults to
+      ``https://api.orcarouter.ai/v1``.
+
+    ``ORCA_BASE_URL`` is a shared self-hosted fallback for both; the
+    explicit ``ORCA_AUTH_BASE_URL`` / ``ORCA_API_BASE_URL`` overrides win
+    over it. Non-loopback origins must be HTTPS.
+    """
+
+    # Public defaults. A self-hosted deployment sets the shared fallback or
+    # the explicit per-origin overrides.
+    auth_base_url: str = "https://www.orcarouter.ai"
+    api_base_url: str = "https://api.orcarouter.ai/v1"
+    # How the credential is obtained:
+    #   "api_key" — the user pastes (or configures) an existing sk-orca- key.
+    #   "oauth"   — OAuth 2.0 + PKCE: the user authorizes in a browser and
+    #               the agent exchanges the code for a durable API key. Both
+    #               paths yield the same kind of key downstream.
+    connect: str = "api_key"
+    # PKCE delivery for the "oauth" connect mode:
+    #   "a" — loopback redirect (default; works where 127.0.0.1 is bindable)
+    #   "b" — out-of-band code (hosts that cannot listen on loopback)
+    flow: str = "a"
+    # Shown on the consent screen; labelled as a claim by OrcaRouter.
+    app_name: str = "VulnHunter Agent"
+    # Requested grant. "api" is the inference grant.
+    scope: str = "api"
+    # Bound the whole interactive authorization (seconds).
+    login_timeout_seconds: int = 300
+    # Bound the single exchange request (seconds).
+    http_timeout_seconds: int = 30
+    # Bound live model discovery (seconds).
+    catalog_timeout_seconds: int = 20
+    catalog_enabled: bool = True
+    # Hard cap on accepted catalog records (defends against an unbounded
+    # response). Also bounds `GET /v1/models?capability=...`.
+    catalog_limit: int = 500
+    # Optional explicit credential-store path. Blank → the default under
+    # ``~/.vulnhunter/``. The store is written 0o600 in a 0o700 dir.
+    credentials_file: str = ""
+    # Optional OAuth client_id (sent on the authorize URL only when set).
+    # OrcaRouter issues no client secret and needs no pre-registered client;
+    # this exists purely to satisfy hosts that expect an OAuth client id.
+    client_id: str = ""
+    # Optional per-connect API key supplied in config/TOML (avoids writing
+    # the literal to a file for the common case; env vars are preferred).
+    api_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -310,6 +375,7 @@ class RepoPropertiesConfig:
 class AgentConfig:
     anthropic: AnthropicConfig
     oauth: OAuthConfig
+    orcarouter: OrcaRouterConfig
     tls: TLSConfig
     sandbox: SandboxConfig
     telemetry: TelemetryConfig
@@ -327,6 +393,99 @@ class AgentConfig:
 
 
 _DEFAULT_CONFIG_FILENAME = "config.toml"
+
+# OrcaRouter public defaults. Authentication and inference live on DIFFERENT
+# origins; never derive one from the other (replacing the hostname or blindly
+# appending /v1 lands on the wrong service).
+_ORCA_DEFAULT_AUTH_BASE = "https://www.orcarouter.ai"
+_ORCA_DEFAULT_API_BASE = "https://api.orcarouter.ai/v1"
+# Accepted values for [orcarouter].connect and [orcarouter].flow.
+_ORCA_CONNECT_MODES = ("api_key", "oauth")
+_ORCA_FLOWS = ("a", "b")
+
+
+def _env_first(env: dict[str, str], *names: str) -> str:
+    """Return the first non-empty env value among ``names`` (stripped)."""
+    for name in names:
+        value = env.get(name)
+        if value and value.strip():
+            return value.strip()
+    return ""
+
+
+def _load_orcarouter_config(raw: dict, env: dict[str, str]) -> OrcaRouterConfig:
+    """Resolve the [orcarouter] block, overlaying ORCA_* environment variables.
+
+    Precedence for the two origins (highest first):
+
+    1. explicit per-origin overrides — ``[orcarouter].auth_base_url`` /
+       ``api_base_url`` or ``ORCA_AUTH_BASE_URL`` / ``ORCA_API_BASE_URL``
+    2. shared self-hosted fallback — ``[orcarouter].base_url`` or
+       ``ORCA_BASE_URL`` (applied to both origins)
+    3. public defaults
+    """
+    toml_auth = str(raw.get("auth_base_url", "") or "").strip()
+    toml_api = str(raw.get("api_base_url", "") or "").strip()
+    shared = _env_first(env, "ORCA_BASE_URL") or str(
+        raw.get("base_url", "") or ""
+    ).strip()
+
+    auth_base = (
+        _env_first(env, "ORCA_AUTH_BASE_URL") or toml_auth or shared or _ORCA_DEFAULT_AUTH_BASE
+    )
+    api_base = (
+        _env_first(env, "ORCA_API_BASE_URL") or toml_api or shared or _ORCA_DEFAULT_API_BASE
+    )
+
+    connect = (
+        _env_first(env, "ORCA_CONNECT")
+        or str(raw.get("connect", "") or "").strip()
+        or "api_key"
+    ).lower()
+    if connect not in _ORCA_CONNECT_MODES:
+        raise ValueError(
+            "orcarouter.connect must be 'api_key' or 'oauth', "
+            f"got '{connect}'"
+        )
+
+    flow = (
+        _env_first(env, "ORCA_FLOW")
+        or str(raw.get("flow", "") or "").strip()
+        or "a"
+    ).lower()
+    if flow not in _ORCA_FLOWS:
+        raise ValueError(
+            "orcarouter.flow must be 'a' (loopback redirect) or 'b' "
+            f"(out-of-band code), got '{flow}'"
+        )
+
+    def _int(key: str, default: int) -> int:
+        value = _env_first(env, _env_name("orcarouter", key)) or raw.get(key)
+        return int(value) if value not in (None, "") else default
+
+    return OrcaRouterConfig(
+        auth_base_url=auth_base,
+        api_base_url=api_base,
+        connect=connect,
+        flow=flow,
+        app_name=_env_first(env, "ORCA_APP_NAME")
+        or str(raw.get("app_name", "") or "").strip()
+        or "VulnHunter Agent",
+        scope=_env_first(env, "ORCA_SCOPE")
+        or str(raw.get("scope", "") or "").strip()
+        or "api",
+        login_timeout_seconds=_int("login_timeout_seconds", 300),
+        http_timeout_seconds=_int("http_timeout_seconds", 30),
+        catalog_timeout_seconds=_int("catalog_timeout_seconds", 20),
+        catalog_enabled=bool(raw.get("catalog_enabled", True)),
+        catalog_limit=_int("catalog_limit", 500),
+        credentials_file=_env_first(env, "ORCA_CREDENTIALS_FILE")
+        or str(raw.get("credentials_file", "") or "").strip(),
+        client_id=_env_first(env, "ORCA_CLIENT_ID")
+        or str(raw.get("client_id", "") or "").strip(),
+        api_key=_env_first(env, "ORCA_API_KEY", "ORCAROUTER_API_KEY")
+        or str(raw.get("api_key", "") or "").strip(),
+    )
 
 
 def _resolve_config_path(explicit: str | os.PathLike[str] | None) -> Path | None:
@@ -409,6 +568,26 @@ def _resolve(
     return value
 
 
+def load_orcarouter_config(
+    path: str | os.PathLike[str] | None = None,
+) -> OrcaRouterConfig:
+    """Resolve ONLY the ``[orcarouter]`` block, overlaying ``ORCA_*`` env vars.
+
+    Used by the ``--mode=orcarouter`` credential/catalog commands, which must
+    work without a full agent config (no model required) so a user can log in
+    and inspect the model catalog before wiring a scan.
+    """
+    config_path = _resolve_config_path(path)
+    raw: dict = {}
+    if config_path is not None:
+        with config_path.open("rb") as fh:
+            raw = tomllib.load(fh)
+    orcarouter_raw = raw.get("orcarouter", {})
+    if not isinstance(orcarouter_raw, dict):
+        orcarouter_raw = {}
+    return _load_orcarouter_config(orcarouter_raw, os.environ)
+
+
 def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
     """Load and validate the agent's configuration.
 
@@ -434,16 +613,23 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         .strip()
         .lower()
     )
-    if auth_mode not in ("api_key", "bedrock_oauth", "bedrock_sigv4"):
+    if auth_mode not in ("api_key", "bedrock_oauth", "bedrock_sigv4", "orcarouter"):
         raise ValueError(
-            "anthropic.auth_mode must be 'api_key', 'bedrock_oauth', or "
-            f"'bedrock_sigv4', got '{auth_mode}'"
+            "anthropic.auth_mode must be 'api_key', 'bedrock_oauth', "
+            f"'bedrock_sigv4', or 'orcarouter', got '{auth_mode}'"
         )
-    # api_key resolves from [anthropic].api_key / VULNHUNT_ANTHROPIC_API_KEY,
-    # falling back to the standard ANTHROPIC_API_KEY env var.
-    api_key = str(
-        _resolve(anthropic_raw, "anthropic", "api_key", default="")
-    ) or os.environ.get("ANTHROPIC_API_KEY", "")
+    # auth_mode='orcarouter' selects the OrcaRouter gateway. The credential is
+    # resolved by a dedicated ConnectCredentialProvider (see auth.py) rather
+    # than from [anthropic].api_key, so the API key here stays blank.
+    # Otherwise api_key resolves from [anthropic].api_key /
+    # VULNHUNT_ANTHROPIC_API_KEY, falling back to the standard
+    # ANTHROPIC_API_KEY env var.
+    if auth_mode == "orcarouter":
+        api_key = ""
+    else:
+        api_key = str(
+            _resolve(anthropic_raw, "anthropic", "api_key", default="")
+        ) or os.environ.get("ANTHROPIC_API_KEY", "")
     anthropic = AnthropicConfig(
         model=str(_resolve(anthropic_raw, "anthropic", "model", required=True)),
         auth_mode=auth_mode,
@@ -494,6 +680,9 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
             "anthropic.auth_mode='bedrock_oauth' requires oauth.token_endpoint, "
             "oauth.client_id, and oauth.client_secret"
         )
+
+    orcarouter_raw = raw.get("orcarouter", {})
+    orcarouter = _load_orcarouter_config(orcarouter_raw, os.environ)
 
     tls = TLSConfig(
         ssl_cert_path=str(
@@ -887,6 +1076,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
     return AgentConfig(
         anthropic=anthropic,
         oauth=oauth,
+        orcarouter=orcarouter,
         tls=tls,
         sandbox=sandbox,
         telemetry=telemetry,

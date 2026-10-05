@@ -70,6 +70,12 @@ Each component is organized into a self-contained subtree:
 * Python 3.12+ (Required only for the runtime agent and the benchmarking harness).
 * *Responsibility Check:* Ensure you are only scanning code bases you are explicitly authorized to analyze.
 
+You supply your own model access. The runtime agent supports the direct Anthropic API,
+AWS Bedrock (OAuth proxy or SigV4), and the [OrcaRouter](https://www.orcarouter.ai)
+gateway — `anthropic.auth_mode = "orcarouter"` with either a pasted `sk-orca-…` API key
+or an OAuth 2.0 + PKCE login. See
+[`vulnhunter-agent/README.md`](vulnhunter-agent/README.md#orcarouter-auth_mode--orcarouter).
+
 ### Installation
 
 ```bash

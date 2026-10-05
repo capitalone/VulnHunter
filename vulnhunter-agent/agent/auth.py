@@ -15,6 +15,11 @@ don't care which auth mode is active:
   SSO, container/instance role). ``get_valid_token()`` returns an empty
   string so the shared call-site interface is preserved.
 
+- ``ConnectCredentialProvider`` — the OrcaRouter provider (``auth_mode =
+  "orcarouter"``). It is not defined here; both of its credential adapters
+  (pasted API key and OAuth 2.0 + PKCE login) live in ``agent.orcarouter``
+  and return a plain OrcaRouter API key through ``get_valid_token()``.
+
 ``make_token_manager(config)`` returns the right one for the configured
 ``anthropic.auth_mode``.
 
@@ -150,15 +155,24 @@ class OAuthTokenManager:
 
 def make_token_manager(
     config: AgentConfig, name: str = "vulnhunter"
-) -> ApiKeyTokenManager | OAuthTokenManager | SigV4TokenManager:
+) -> ApiKeyTokenManager | OAuthTokenManager | SigV4TokenManager | ConnectCredentialProvider:
     """Return the Anthropic token provider for the configured auth mode.
 
     All providers expose ``get_valid_token()``, so callers can use the
-    result without caring whether auth is API-key, Bedrock/OAuth, or
-    Bedrock/SigV4.
+    result without caring whether auth is API-key, Bedrock/OAuth,
+    Bedrock/SigV4, or the OrcaRouter gateway. In the OrcaRouter case the
+    return value is a :class:`ConnectCredentialProvider`, which resolves the
+    credential through whichever of its two adapters the user configured.
     """
     if config.anthropic.auth_mode == "bedrock_oauth":
         return OAuthTokenManager(config.oauth, config.tls, name=name)
     if config.anthropic.auth_mode == "bedrock_sigv4":
         return SigV4TokenManager(name=name)
+    if config.anthropic.auth_mode == "orcarouter":
+        # Imported lazily so the OrcaRouter package is only loaded when it is
+        # actually selected, and to avoid an import cycle (agent.orcarouter
+        # imports .config and ._url).
+        from .orcarouter import ConnectCredentialProvider
+
+        return ConnectCredentialProvider(config.orcarouter, tls=config.tls)
     return ApiKeyTokenManager(config.anthropic.api_key, name=name)
