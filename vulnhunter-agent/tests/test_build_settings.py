@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 
 import pytest
@@ -77,6 +78,71 @@ class TestBuildSandbox:
         )
         sandbox = _build_sandbox(cfg)
         assert sandbox["network"]["allowedDomains"] == []
+
+    def test_sigv4_default_endpoint_allows_regional_bedrock_and_sts(
+        self, agent_config: Callable[..., AgentConfig]
+    ) -> None:
+        cfg = agent_config(
+            anthropic=AnthropicConfig(
+                model="us.anthropic.claude-opus-4-8",
+                auth_mode="bedrock_sigv4",
+                aws_region="us-east-1",
+            )
+        )
+        domains = _build_sandbox(cfg)["network"]["allowedDomains"]
+        assert "bedrock-runtime.us-east-1.amazonaws.com" in domains
+        assert "sts.us-east-1.amazonaws.com" in domains
+
+    def test_sigv4_explicit_endpoint_wins_for_bedrock_host(
+        self, agent_config: Callable[..., AgentConfig]
+    ) -> None:
+        cfg = agent_config(
+            anthropic=AnthropicConfig(
+                model="us.anthropic.claude-opus-4-8",
+                auth_mode="bedrock_sigv4",
+                aws_region="us-west-2",
+                bedrock_base_url="https://bedrock.vpce.example.com",
+            )
+        )
+        domains = _build_sandbox(cfg)["network"]["allowedDomains"]
+        assert "bedrock.vpce.example.com" in domains
+        # STS still allowed for credential resolution in the region.
+        assert "sts.us-west-2.amazonaws.com" in domains
+
+    def test_sigv4_allows_reading_aws_config_dir(
+        self, agent_config: Callable[..., AgentConfig]
+    ) -> None:
+        # The deny-read list covers /home and /root, which on Linux hides
+        # ~/.aws (config, credentials, SSO cache) and would silently reduce
+        # the credential chain to env vars only. SigV4 mode must carve out
+        # a read-only allow for ~/.aws so aws_profile / SSO work sandboxed.
+        cfg = agent_config(
+            anthropic=AnthropicConfig(
+                model="us.anthropic.claude-opus-4-8",
+                auth_mode="bedrock_sigv4",
+                aws_region="us-east-1",
+            )
+        )
+        fs = _build_sandbox(cfg)["filesystem"]
+        assert os.path.expanduser("~/.aws") in fs["allowRead"]
+        # Read-only: the write allow-list is untouched.
+        assert fs["allowWrite"] == ["."]
+
+    def test_non_sigv4_modes_do_not_expose_aws_config_dir(
+        self, agent_config: Callable[..., AgentConfig]
+    ) -> None:
+        for anthropic in (
+            AnthropicConfig(model="m", auth_mode="api_key", api_key="sk-test"),
+            AnthropicConfig(
+                model="m",
+                auth_mode="bedrock_oauth",
+                bedrock_base_url="https://bedrock.example.com",
+                aws_region="us-east-1",
+            ),
+        ):
+            cfg = agent_config(anthropic=anthropic)
+            fs = _build_sandbox(cfg)["filesystem"]
+            assert os.path.expanduser("~/.aws") not in fs["allowRead"]
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +306,51 @@ class TestBuildClaudeSettings:
         )
         env = json.loads(build_claude_settings(cfg, "sk-passed", model="claude-opus-4-8"))["env"]
         assert env["ANTHROPIC_API_KEY"] == "sk-passed"
+
+    def test_sigv4_sets_bedrock_but_omits_bearer_and_skip_auth(
+        self, agent_config: Callable[..., AgentConfig]
+    ) -> None:
+        # The core SigV4 contract: Bedrock on, region set, prompt caching on,
+        # and — critically — NO bearer token and NO skip-auth flag, so the CLI
+        # falls through to AWS SigV4 signing.
+        cfg = agent_config(
+            anthropic=AnthropicConfig(
+                model="us.anthropic.claude-opus-4-8",
+                auth_mode="bedrock_sigv4",
+                aws_region="us-east-1",
+            )
+        )
+        env = json.loads(
+            build_claude_settings(cfg, "", model="us.anthropic.claude-opus-4-8")
+        )["env"]
+        assert env["CLAUDE_CODE_USE_BEDROCK"] == "1"
+        assert env["AWS_REGION"] == "us-east-1"
+        assert env["ENABLE_PROMPT_CACHING_1H_BEDROCK"] == "1"
+        assert "ANTHROPIC_AUTH_TOKEN" not in env
+        assert "CLAUDE_CODE_SKIP_BEDROCK_AUTH" not in env
+        assert "ANTHROPIC_API_KEY" not in env
+        # No explicit endpoint / profile → those keys are omitted.
+        assert "ANTHROPIC_BEDROCK_BASE_URL" not in env
+        assert "AWS_PROFILE" not in env
+
+    def test_sigv4_sets_profile_and_endpoint_when_configured(
+        self, agent_config: Callable[..., AgentConfig]
+    ) -> None:
+        cfg = agent_config(
+            anthropic=AnthropicConfig(
+                model="us.anthropic.claude-opus-4-8",
+                auth_mode="bedrock_sigv4",
+                aws_region="us-west-2",
+                aws_profile="vulnhunter",
+                bedrock_base_url="https://bedrock.vpce.example.com",
+            )
+        )
+        env = json.loads(
+            build_claude_settings(cfg, "", model="us.anthropic.claude-opus-4-8")
+        )["env"]
+        assert env["AWS_PROFILE"] == "vulnhunter"
+        assert env["ANTHROPIC_BEDROCK_BASE_URL"] == "https://bedrock.vpce.example.com"
+        assert env["AWS_REGION"] == "us-west-2"
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,8 @@ audit content, but only rewrites basic-auth URLs. It must also redact bearer
 headers, access_token query params, and raw token prefixes.
 """
 
+import pytest
+
 from agent._url import redact
 
 

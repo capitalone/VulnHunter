@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import _llm
-from .auth import OAuthTokenManager
+from .auth import TokenProvider
 from .config import AgentConfig
 
 if TYPE_CHECKING:
@@ -182,7 +182,7 @@ def _coerce_finding(raw: dict[str, Any], files: dict[str, dict[str, str]]) -> Fi
 async def extract_findings(
     results_dir: Path,
     config: AgentConfig,
-    token_manager: OAuthTokenManager,
+    token_manager: TokenProvider,
     *,
     cost_tracker: "_llm.CostStats | None" = None,
     audit_writer: "AuditWriter | None" = None,
