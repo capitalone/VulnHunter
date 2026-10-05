@@ -165,6 +165,14 @@ class TestAuditWriter:
                     "anthropic-api-key": "SECRET-D",
                     "Authorization": "SECRET-E",
                 },
+                # Every remaining name/suffix in the rule; api_key, private_key,
+                # secret_key and set-cookie only match once "_"/"-" are stripped.
+                "api_key": "SECRET-I",
+                "private_key": "SECRET-J",
+                "secret_key": "SECRET-K",
+                "set-cookie": "SECRET-L",
+                "db_passwd": "SECRET-M",
+                "Cookie": "SECRET-N",
                 "attempts": [{"password": "SECRET-F"}, {"refresh_token": "SECRET-G"}],
             }
         )
