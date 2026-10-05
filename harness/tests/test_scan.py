@@ -423,3 +423,127 @@ def test_scan_targets_default_workers(monkeypatch):
                         lambda cd, log_filename=None: (cd, "lbl", 0, 1, 1.0, "rd", {}))
     results = scan.scan_targets([{"clone_dir": "/c/a", "key": "a"}], status_interval=10_000)
     assert len(results) == 1
+
+
+# --- scan log must not follow links planted in the (untrusted) clone ---
+
+class _NoTimer:
+    def __init__(self, *a, **k):
+        pass
+
+    def start(self):
+        pass
+
+    def cancel(self):
+        pass
+
+
+def _run_fake_scan(monkeypatch, tmp_path, folder, **kw):
+    monkeypatch.setattr(scan, "SKILLS_DIR", str(tmp_path / "skills"))
+    (tmp_path / "skills").mkdir(exist_ok=True)
+    lines = [json.dumps({"type": "result", "total_cost_usd": 0.1}) + "\n"]
+    monkeypatch.setattr(scan.subprocess, "Popen",
+                        lambda *a, **k: _FakePopen(lines, returncode=0))
+    monkeypatch.setattr(scan.threading, "Timer", _NoTimer)
+    return scan.scan_folder(str(folder), **kw)
+
+
+def test_scan_folder_does_not_write_through_symlinked_log(monkeypatch, tmp_path):
+    # A repo can commit `benchmark_scan.log -> ~/.zshrc`; opening the log with
+    # plain open(path, "w") follows the link and truncates the host file.
+    victim = tmp_path / "victim_rc"
+    victim.write_text("export SECRET=1\n")
+    folder = tmp_path / "repo"
+    folder.mkdir()
+    log = folder / "benchmark_scan.log"
+    os.symlink(str(victim), str(log))
+
+    _run_fake_scan(monkeypatch, tmp_path, folder)
+
+    assert victim.read_text() == "export SECRET=1\n", "host file was overwritten via symlink"
+    assert not os.path.islink(str(log))
+    assert '"result"' in log.read_text()
+
+
+def test_scan_folder_does_not_create_dangling_symlink_target(monkeypatch, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    planted_target = outside / "created_by_attacker"
+    folder = tmp_path / "repo"
+    folder.mkdir()
+    log = folder / "batch_scan.log"
+    os.symlink(str(planted_target), str(log))
+
+    _run_fake_scan(monkeypatch, tmp_path, folder, log_file=str(log))
+
+    assert not planted_target.exists(), "dangling symlink target was created on the host"
+    assert log.is_file() and not os.path.islink(str(log))
+
+
+def test_scan_folder_does_not_truncate_hardlinked_log(monkeypatch, tmp_path):
+    # An agent with Bash in the clone could leave a hard link to a host file at
+    # the log path before a retry; O_TRUNC through it would clobber the file.
+    victim = tmp_path / "victim_rc"
+    victim.write_text("keep me\n")
+    folder = tmp_path / "repo"
+    folder.mkdir()
+    log = folder / "benchmark_scan.log"
+    os.link(str(victim), str(log))
+
+    _run_fake_scan(monkeypatch, tmp_path, folder)
+
+    assert victim.read_text() == "keep me\n"
+
+
+def _result_log(path, status=429):
+    path.write_text(json.dumps({"type": "result", "api_error_status": status,
+                                "total_cost_usd": 9.99}) + "\n")
+
+
+def test_log_readers_ignore_symlinked_log(tmp_path):
+    real = tmp_path / "elsewhere.log"
+    _result_log(real)
+    link = tmp_path / "benchmark_scan.log"
+    os.symlink(str(real), str(link))
+    assert scan.is_rate_limit_failure(str(link)) is False
+    assert scan.extract_cost_from_log(str(link)) == {}
+
+
+def test_log_readers_ignore_fifo_log(tmp_path):
+    fifo = tmp_path / "benchmark_scan.log"
+    os.mkfifo(str(fifo))
+    # Must return promptly rather than block opening the FIFO for read.
+    assert scan.is_rate_limit_failure(str(fifo)) is False
+    assert scan.extract_cost_from_log(str(fifo)) == {}
+
+
+def test_clean_prior_results_removes_dangling_log_link(tmp_path):
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    log = clone / "benchmark_scan.log"
+    os.symlink(str(tmp_path / "missing"), str(log))
+    removed = scan.clean_prior_results(str(clone))
+    assert not os.path.lexists(str(log))
+    assert "benchmark_scan.log" in removed
+
+
+def test_clean_prior_results_unlinks_log_link_not_target(tmp_path):
+    victim = tmp_path / "victim"
+    victim.write_text("keep")
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    log = clone / "benchmark_scan.log"
+    os.symlink(str(victim), str(log))
+    scan.clean_prior_results(str(clone))
+    assert not os.path.lexists(str(log))
+    assert victim.read_text() == "keep"
+
+
+def test_clean_incomplete_results_removes_dangling_log_link(tmp_path):
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    (clone / "clone_VULNHUNT_RESULTS_1").mkdir()  # incomplete: no README
+    log = clone / "batch_scan.log"
+    os.symlink(str(tmp_path / "missing"), str(log))
+    scan.clean_incomplete_results(str(clone), log_filename="batch_scan.log")
+    assert not os.path.lexists(str(log))

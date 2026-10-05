@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import stat
 import subprocess
 import threading
 import time
@@ -35,13 +36,67 @@ def ts():
     return datetime.now().strftime("%H:%M:%S")
 
 
+# O_NOFOLLOW is POSIX-only; on Windows it is absent and we rely on the
+# lstat/islink checks alone.
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_BINARY = getattr(os, "O_BINARY", 0)
+
+
+def _is_regular_file(path):
+    """True only for a real regular file at `path` (no symlink, FIFO, device...).
+
+    Scan logs live inside the untrusted clone, so a log path may be a planted
+    symlink to a host file or a FIFO that would block a reader forever.
+    """
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def _open_log_for_read(path):
+    """Open a scan log for binary reading without following a final symlink.
+
+    Returns None when the path is not a regular file (absent, symlink, FIFO...).
+    """
+    if not path or not _is_regular_file(path):
+        return None
+    try:
+        fd = os.open(path, os.O_RDONLY | _O_NOFOLLOW | _O_BINARY)
+    except OSError:
+        return None
+    return os.fdopen(fd, "rb")
+
+
+def _open_log_for_write(path):
+    """Create a fresh scan log at `path` without writing through a planted link.
+
+    The log lives inside the untrusted clone: a repo can commit
+    `batch_scan.log -> ~/.zshrc` (or a dangling link to a not-yet-existing
+    host path), and an agent with Bash can leave a hard link there before a
+    retry. open(path, "w") would follow/truncate any of those. Remove whatever
+    is at the path first (unlinking a link never touches its target), then
+    create the file exclusively with O_NOFOLLOW so a link raced into place
+    makes the open fail rather than redirect the write.
+    """
+    if os.path.lexists(path):
+        _remove_results_entry(path)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW
+    fd = os.open(path, flags, 0o644)
+    return os.fdopen(fd, "w")
+
+
 def _tail_lines(path, max_bytes=65536):
     """Return the last lines of a file without loading the whole thing.
 
     Scan logs are JSONL and can grow large over a multi-hour scan; callers only
     need the final `result` event, so reading the trailing window is enough.
+    A log that is not a regular file (e.g. a planted symlink) reads as empty.
     """
-    with open(path, "rb") as f:
+    f = _open_log_for_read(path)
+    if f is None:
+        return []
+    with f:
         f.seek(0, os.SEEK_END)
         size = f.tell()
         f.seek(max(0, size - max_bytes))
@@ -84,6 +139,9 @@ def _remove_results_entry(path):
         os.unlink(path)
     elif os.path.isdir(path):
         shutil.rmtree(path)
+    elif os.path.lexists(path):
+        # Regular file, FIFO, socket, ... — just drop the name.
+        os.remove(path)
 
 
 def clean_incomplete_results(clone_dir, log_filename="benchmark_scan.log"):
@@ -107,8 +165,9 @@ def clean_incomplete_results(clone_dir, log_filename="benchmark_scan.log"):
                 _remove_results_entry(full_path)
                 removed.append(entry)
                 log_file = os.path.join(clone_dir, log_filename)
-                if os.path.isfile(log_file):
-                    os.remove(log_file)
+                # lexists, not isfile: isfile misses a dangling planted link.
+                if os.path.lexists(log_file):
+                    _remove_results_entry(log_file)
     return removed
 
 
@@ -127,15 +186,16 @@ def clean_prior_results(clone_dir, log_filename="benchmark_scan.log"):
                 _remove_results_entry(full_path)
                 removed.append(entry)
     log_file = os.path.join(clone_dir, log_filename)
-    if os.path.isfile(log_file):
-        os.remove(log_file)
+    # lexists, not isfile: isfile misses a dangling planted link.
+    if os.path.lexists(log_file):
+        _remove_results_entry(log_file)
         removed.append(log_filename)
     return removed
 
 
 def is_rate_limit_failure(log_file_path):
     """Check if a scan failed due to 429 rate limiting by inspecting the final result event."""
-    if not log_file_path or not os.path.isfile(log_file_path):
+    if not log_file_path or not _is_regular_file(log_file_path):
         return False
     try:
         lines = _tail_lines(log_file_path)
@@ -161,7 +221,7 @@ def extract_cost_from_log(log_file_path):
     cache_read_tokens, cache_creation_tokens, duration_api_ms, num_turns,
     or empty dict if not found.
     """
-    if not log_file_path or not os.path.isfile(log_file_path):
+    if not log_file_path or not _is_regular_file(log_file_path):
         return {}
     try:
         lines = _tail_lines(log_file_path)
@@ -254,7 +314,7 @@ def scan_folder(folder_path, log_file=None, readonly=False):
     timer = threading.Timer(SCAN_TIMEOUT, _kill_on_timeout)
     timer.start()
     try:
-        with open(log_file, "w") as log:
+        with _open_log_for_write(log_file) as log:
             for line in proc.stdout:
                 line = line.strip()
                 if not line:

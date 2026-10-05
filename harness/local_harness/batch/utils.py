@@ -10,7 +10,7 @@ from local_harness.config import (
     BATCH_REPO_LIST_FILE,
     BATCH_UPLOAD_DIR,
 )
-from local_harness.scan import extract_cost_from_log
+from local_harness.scan import _open_log_for_read, extract_cost_from_log
 
 
 def _ignore_symlinks(dirpath, names):
@@ -146,12 +146,15 @@ def scan_status(clone_base=None, log_filename=None):
             continue
 
         log_path = os.path.join(entry_path, log_filename)
-        if not os.path.isfile(log_path):
+        # The log lives in the untrusted clone: a planted symlink (or FIFO) at
+        # this path is treated as absent rather than followed.
+        f = _open_log_for_read(log_path)
+        if f is None:
             not_started.append(entry)
             continue
 
-        with open(log_path) as f:
-            lines = f.readlines()
+        with f:
+            lines = f.read().decode("utf-8", errors="replace").splitlines()
 
         if not lines:
             not_started.append(entry)

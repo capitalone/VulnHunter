@@ -223,3 +223,28 @@ def test_scan_status_many_not_started(monkeypatch, tmp_path):
         (base / f"repo{i:02d}").mkdir()
     out = utils.scan_status(clone_base=str(base))
     assert len(out["not_started"]) == 15
+
+
+def test_scan_status_ignores_symlinked_log(tmp_path):
+    # A repo-planted `batch_scan.log -> <host file>` must not be read; treat it
+    # as absent (not started).
+    base = tmp_path / "repos"
+    base.mkdir()
+    real = tmp_path / "elsewhere.log"
+    real.write_text(json.dumps({"type": "result", "is_error": False, "duration_ms": 1}) + "\n")
+    repo = base / "repoA"
+    repo.mkdir()
+    os.symlink(str(real), str(repo / "batch_scan.log"))
+    out = utils.scan_status(clone_base=str(base), log_filename="batch_scan.log")
+    assert out["not_started"] == ["repoA"]
+    assert out["complete"] == []
+
+
+def test_scan_status_ignores_fifo_log(tmp_path):
+    base = tmp_path / "repos"
+    base.mkdir()
+    repo = base / "repoA"
+    repo.mkdir()
+    os.mkfifo(str(repo / "batch_scan.log"))
+    out = utils.scan_status(clone_base=str(base), log_filename="batch_scan.log")
+    assert out["not_started"] == ["repoA"]
