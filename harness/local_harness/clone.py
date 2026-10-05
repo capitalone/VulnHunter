@@ -1,10 +1,13 @@
 """Clone repositories at specific commit hashes for benchmarking."""
 
 import os
+import re
 import shutil
 import subprocess
 
 from .config import CLONE_BASE_DIR, CLONE_TIMEOUT
+
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
 
 
 def parse_source_url(source_code_url):
@@ -48,6 +51,13 @@ def clone_at_commit(repo_url, commit_hash, target_dir):
 
     Returns (target_dir, error_msg|None).
     """
+    if repo_url.startswith("-"):
+        return (target_dir, f"refusing repo URL that looks like a git option: {repo_url!r}")
+    if commit_hash.startswith("-"):
+        return (target_dir, f"refusing commit hash that looks like a git option: {commit_hash!r}")
+    if not _COMMIT_SHA_RE.match(commit_hash):
+        return (target_dir, f"commit must be a 7-40 char hex SHA, got {commit_hash!r}")
+
     if os.path.isdir(target_dir):
         if is_at_commit(target_dir, commit_hash):
             print(f"  [clone] Reusing existing clone at correct commit: {target_dir}")
@@ -72,7 +82,7 @@ def clone_at_commit(repo_url, commit_hash, target_dir):
         )
         if init.returncode == 0 and remote.returncode == 0:
             result = subprocess.run(
-                ["git", "fetch", "--depth=1", "origin", commit_hash],
+                ["git", "fetch", "--depth=1", "--", "origin", commit_hash],
                 capture_output=True, text=True, timeout=CLONE_TIMEOUT, cwd=target_dir,
             )
             if result.returncode == 0:
@@ -93,7 +103,7 @@ def clone_at_commit(repo_url, commit_hash, target_dir):
     print(f"  [clone] Fast fetch failed, falling back to full clone ...")
     try:
         result = subprocess.run(
-            ["git", "clone", repo_url, target_dir],
+            ["git", "clone", "--", repo_url, target_dir],
             capture_output=True, text=True, timeout=CLONE_TIMEOUT,
         )
         if result.returncode != 0:
@@ -101,7 +111,7 @@ def clone_at_commit(repo_url, commit_hash, target_dir):
             return (target_dir, error)
 
         checkout = subprocess.run(
-            ["git", "checkout", commit_hash],
+            ["git", "checkout", commit_hash, "--"],
             capture_output=True, text=True, timeout=30, cwd=target_dir,
         )
         if checkout.returncode != 0:
