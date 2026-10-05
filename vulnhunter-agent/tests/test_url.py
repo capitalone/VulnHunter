@@ -107,6 +107,30 @@ class TestRedact:
         url = "https://user:pass@github.com/owner/repo"
         assert redact(redact(url)) == redact(url)
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "client_secret=SUPERSECRET&grant_type=x",
+            "client_secret: SUPERSECRET",
+            "CLIENT_SECRET=SUPERSECRET",
+            '{"client_secret": "SUPERSECRET"}',
+            '{"client_secret":"SUPERSECRET"}',
+            'client_secret = "SUPERSECRET"',
+            "client_secret='SUPERSECRET'",
+            "client-secret=SUPERSECRET",
+            "clientSecret=SUPERSECRET",
+            "{'client_secret': 'SUPERSECRET'}",
+            '{"client_secret":["SUPERSECRET"]}',
+            "client_secret[0]=SUPERSECRET",
+            "client_secret=SUPERSECRET;grant_type=x",
+        ],
+    )
+    def test_client_secret_redacted(self, text: str) -> None:
+        out = redact(text)
+        assert "SUPERSECRET" not in out
+        assert "***" in out
+        assert redact(out) == out
+
     def test_handles_username_only(self) -> None:
         # The regex matches ://<no-@-or-/>+@.
         assert redact("https://user@github.com/o/r") == "https://***@github.com/o/r"
