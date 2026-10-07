@@ -169,6 +169,13 @@ def _coerce_sources(parsed: Any) -> list[dict[str, str]]:
     the same comments file, so a malformed pre-flight result just
     means we miss some entries here and the skill catches them in
     iteration 1 instead of zero.
+
+    Deliberately NOT length-capped: the single control on cross-repo
+    clone work is ``config.verify.max_additional_repos``, enforced by
+    ``verify._process_clone_request`` *after* hint resolution and
+    dedup. Truncating here would drop real references behind junk or
+    unresolvable ones and make a configured cap above the truncation
+    point inert.
     """
     if not isinstance(parsed, dict):
         return []

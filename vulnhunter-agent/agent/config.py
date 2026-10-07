@@ -288,6 +288,13 @@ class VerifyConfig:
     max_event_pages: int = 20
     max_edit_diff_bytes: int = 200_000
     max_edit_total_bytes: int = 5_000_000
+    # Upper bound on additional cross-repo clone *attempts* per verify run
+    # (distinct repos; failed clones count). Bounds attacker-supplied
+    # cross-repo references (derived by the pre-flight extractor from
+    # issue/comment text) from driving unbounded clones. References past the
+    # cap are recorded as ignored hints (R6). 0 disables cross-repo cloning;
+    # negative values are rejected by load_config.
+    max_additional_repos: int = 10
 
 
 @dataclass(frozen=True)
@@ -831,7 +838,21 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
                 verify_raw, "verify", "max_edit_total_bytes", kind=int, default=5_000_000
             )
         ),
+        max_additional_repos=int(
+            _resolve(
+                verify_raw,
+                "verify",
+                "max_additional_repos",
+                kind=int,
+                default=VerifyConfig.max_additional_repos,
+            )
+        ),
     )
+    if verify.max_additional_repos < 0:
+        raise ValueError(
+            "verify.max_additional_repos must be >= 0 (0 disables cross-repo "
+            f"cloning), got {verify.max_additional_repos}"
+        )
 
     audit_raw = raw.get("audit", {})
     audit = AuditConfig(

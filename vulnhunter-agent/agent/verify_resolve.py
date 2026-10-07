@@ -60,6 +60,29 @@ def _hint_host(url: str) -> str | None:
     return parsed.hostname.lower() if parsed.hostname else None
 
 
+def repo_identity(url: str) -> str:
+    """Normalize a resolved clone URL to a ``host/owner/repo`` identity key.
+
+    Used to dedupe cross-repo references that name the same repository in
+    different spellings (alias vs. URL, ``.git`` suffix, trailing slash,
+    case, HTTPS vs. ``ssh://`` vs. scp-like ``git@host:path``) so that
+    duplicate mentions do not each consume a clone attempt. Scheme, user
+    info and port are dropped; host and path are lowercased (GitHub-style
+    hosts treat owner/repo case-insensitively).
+    """
+    cleaned = url.strip()
+    if cleaned.startswith("git@") and "://" not in cleaned:
+        host, _, path = cleaned[len("git@"):].partition(":")
+    else:
+        parsed = urlparse(cleaned)
+        host = parsed.hostname or ""
+        path = parsed.path
+    path = path.strip("/")
+    if path.lower().endswith(".git"):
+        path = path[: -len(".git")]
+    return f"{host.lower()}/{path.strip('/').lower()}"
+
+
 def resolve_repo_hint(
     hint: str,
     aliases: dict[str, str],
