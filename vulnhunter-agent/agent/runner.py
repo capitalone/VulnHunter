@@ -244,6 +244,29 @@ def _find_results_dir(clone_dir: Path) -> Path | None:
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
+def _results_dir_is_complete(results_dir: Path | None) -> bool:
+    """True when ``results_dir`` holds a real scan report, not an empty shell.
+
+    The subprocess engines pre-create the ``*_VULNHUNT_RESULTS_*`` directory
+    before launching the harness, so its mere *existence* proves nothing — a
+    crashed, OOM-killed, or non-zero-exiting engine leaves the empty shell
+    behind, and keying success on the directory alone reports "died before
+    looking" as a clean "found nothing". The skill's completion contract
+    writes ``README.md`` as its final report (downstream stages —
+    issues_extract, issues_remote_report — require it), so success keys on
+    that file existing with real content. The ``> 100`` byte floor matches
+    the harness's ``has_valid_results`` threshold, rejecting a stub README a
+    partially-run scan may have touched.
+    """
+    if results_dir is None or not results_dir.is_dir():
+        return False
+    readme = results_dir / "README.md"
+    try:
+        return readme.is_file() and readme.stat().st_size > 100
+    except OSError:
+        return False
+
+
 class PriorResultsError(RuntimeError):
     """Raised when an existing ``*_VULNHUNT_RESULTS_*`` dir would shadow this scan.
 

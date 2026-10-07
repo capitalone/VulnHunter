@@ -22,10 +22,13 @@ every required value is supplied via env vars.
 from __future__ import annotations
 
 import os
+import shlex
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+
+from agent.engines import ENGINE_NAMES
 
 
 @dataclass(frozen=True)
@@ -117,6 +120,22 @@ class ScanConfig:
     # the bundled CLI bypasses any inherited HTTP proxy for these hosts/CIDRs.
     # Default covers loopback + private ranges; add your own internal zones.
     no_proxy: str = "localhost,127.0.0.1,169.254.169.254,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    # Which agent harness drives the scan. "claude-code" is the existing
+    # Claude Agent SDK path (unchanged); "hermes" shells out to its CLI with
+    # the same results-directory contract. Future CLI engines can reuse
+    # agent/engines/.
+    engine: str = "claude-code"
+    # Override for the engine binary path (default: $PATH lookup).
+    engine_command: str = ""
+    # Hermes model-routing provider (hermes engine only; empty = hermes
+    # config default), e.g. "anthropic", "openai-codex", "openrouter".
+    engine_provider: str = ""
+    # Hard cap for one engine-driven scan, seconds (CLI engines only).
+    engine_timeout_seconds: int = 21_600
+    # Extra CLI flags appended to the selected engine invocation. Give a
+    # native TOML list so args with commas, spaces, or parens
+    # survive intact; a bare string is shlex-split as a fallback.
+    engine_extra_args: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -409,6 +428,28 @@ def _resolve(
     return value
 
 
+def _parse_engine_extra_args(raw: Any) -> list[str]:
+    """Normalize ``[scan] engine_extra_args`` to a clean argv list.
+
+    A native TOML list (``["--allow-tool", "shell(ls,cat)"]``) is the
+    canonical form and is passed through verbatim — this preserves args
+    that contain commas, spaces, or parentheses; a naive comma split would
+    shred such values.
+
+    A bare string (e.g. from an env override, which can't express a list)
+    is tokenized with ``shlex.split`` so quoting works the way a shell
+    user expects: ``"--allow-tool 'shell(ls,cat)'"`` → two args.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        return [str(a) for a in raw if str(a).strip()]
+    text = str(raw).strip()
+    if not text:
+        return []
+    return [a for a in shlex.split(text) if a.strip()]
+
+
 def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
     """Load and validate the agent's configuration.
 
@@ -604,7 +645,29 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
                 "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
             )
         ),
+        engine=str(
+            _resolve(scan_raw, "scan", "engine", default="claude-code")
+        ),
+        engine_command=str(
+            _resolve(scan_raw, "scan", "engine_command", default="")
+        ),
+        engine_provider=str(
+            _resolve(scan_raw, "scan", "engine_provider", default="")
+        ),
+        engine_timeout_seconds=int(
+            _resolve(
+                scan_raw, "scan", "engine_timeout_seconds", kind=int, default=21_600
+            )
+        ),
+        engine_extra_args=_parse_engine_extra_args(
+            _resolve(scan_raw, "scan", "engine_extra_args", default=[])
+        ),
     )
+    if scan.engine not in ENGINE_NAMES:
+        raise ValueError(
+            f"[scan] engine must be one of {', '.join(ENGINE_NAMES)}; "
+            f"got {scan.engine!r}"
+        )
 
     github = GitHubConfig(
         host=str(_resolve(github_raw, "github", "host", default="github.com")),

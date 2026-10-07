@@ -1,0 +1,11 @@
+{
+  "name": "claude-code",
+  "description": "Reference adapter: identity transform of the repo-root skill sources. Installs to ~/.claude/skills via install.sh (default target). Byte-compatibility with the sources is enforced by tests/test_render_skills.py.",
+  "skills": ["vulnhunt", "vulnhunt-fix-verify", "vulnhunter-fix"],
+  "install": {
+    "target_dir": "~/.claude/skills",
+    "script": "./install.sh            # or: ./install.sh --target claude-code",
+    "headless": "claude -p '/vulnhunt <target>' --output-format stream-json --verbose --allowedTools 'Read Write Edit Bash Agent' --permission-mode acceptEdits --add-dir <skills-dir>"
+  },
+  "transforms": []
+}

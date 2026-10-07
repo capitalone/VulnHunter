@@ -68,3 +68,23 @@ jobs:
             ${{ matrix.project }}/pytest-report.xml
             ${{ matrix.project }}/coverage.xml
           if-no-files-found: ignore
+
+  # Multi-harness skill rendering: golden tests (claude-code identity) and
+  # adapter drift tripwires. Stdlib-only — no install needed.
+  renderer:
+    name: skill-renderer (adapters)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.12"
+
+      - name: Render all adapters (must succeed cleanly)
+        run: python3 scripts/render_skills.py --adapter all
+
+      - name: Run renderer tests
+        run: python3 -m unittest discover -s tests -v

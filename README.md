@@ -100,6 +100,25 @@ REM .\uninstall.cmd
 > [!NOTE]
 > `install.sh`/`install.cmd` copy files directly (rather than symlinking) because symlinks can break `find`/`glob` functionality inside subagents. Re-run the install script after pulling updates to refresh your local environment.
 
+### Hermes agent harness (experimental)
+
+The scanner skill can also be rendered for Hermes, with the Claude Code path
+unchanged:
+
+```bash
+./install.sh --target hermes    # ~/.hermes/skills/vulnhunt
+```
+
+See [docs/ENGINES.md](docs/ENGINES.md) for headless usage, engine selection
+in the runtime agent and benchmark harness, and Hermes validation status.
+Real-run evidence is recorded in
+[docs/evidence/hermes-headless-validation.md](docs/evidence/hermes-headless-validation.md).
+The renderer, engine protocol, and subprocess base remain deliberately
+modular; [docs/ADAPTER_GUIDE.md](docs/ADAPTER_GUIDE.md) describes how a future
+harness can be added as its own reviewed contribution. The Hermes adapter is
+experimental until benchmarked against the ground-truth corpus — VulnHunter's
+gates are calibrated for Opus-class reasoning models.
+
 ---
 
 ## Usage Guide
@@ -139,7 +158,7 @@ claude --model opus --add-dir ~/.claude/skills/vulnhunt-fix-verify \
 ## Automation & Scale
 
 ### Headless Runtime Agent (`vulnhunter-agent/`)
-For non-interactive or CI/CD pipelines, `vulnhunter-agent/` wraps the scanner into a headless workflow. It clones targets, executes `/vulnhunt`, publishes results, and opens GitHub issues for confirmed bugs. It connects natively via the direct Anthropic API. 
+For non-interactive or CI/CD pipelines, `vulnhunter-agent/` wraps the scanner into a headless workflow. It clones targets, executes `/vulnhunt`, publishes results, and opens GitHub issues for confirmed bugs. The existing Claude Agent SDK path remains the default; the optional Hermes engine drives the same results contract through the Hermes CLI.
 
 Review the [`vulnhunter-agent/README.md`](vulnhunter-agent/README.md) for deployment blueprints.
 

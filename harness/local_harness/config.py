@@ -34,6 +34,56 @@ JUDGE_RETRY_MAX_BACKOFF = 180
 SKILLS_DIR = os.path.expanduser("~/.claude/skills/vulnhunt")
 PHASES_DIR = os.path.join(SKILLS_DIR, "phases")
 
+# --- Scan/judge engine selection -----------------------------------------
+# Which agent harness drives scans (and, separately, the judge). The skills
+# must be installed for that harness (./install.sh --target <engine> from the
+# repo root). Override via VULNHUNT_HARNESS_ENGINE / VULNHUNT_HARNESS_JUDGE_ENGINE.
+# Judging with a DIFFERENT engine than the scanner avoids self-preference
+# bias — e.g. scan with hermes, judge with claude-code.
+ENGINE = os.environ.get("VULNHUNT_HARNESS_ENGINE", "claude-code")
+JUDGE_ENGINE = os.environ.get("VULNHUNT_HARNESS_JUDGE_ENGINE", ENGINE)
+
+ENGINES = {
+    "claude-code": {
+        "binary": "claude",
+        "skills_dir": "~/.claude/skills/vulnhunt",
+    },
+    "hermes": {
+        "binary": "hermes",
+        "skills_dir": "~/.hermes/skills/vulnhunt",
+    },
+}
+
+
+def validate_engine(name):
+    """Raise a clear ValueError if ``name`` isn't a known engine.
+
+    Deliberately NOT called at import time: a typo'd VULNHUNT_HARNESS_ENGINE
+    should fail at the point of use (``build_scan_command`` /
+    ``build_judge_command`` / ``scan_folder``) with a "you asked for engine
+    X" message, not break every ``import local_harness.config`` — including
+    ``--help`` paths and unrelated tooling — before anything runs.
+    """
+    if name not in ENGINES:
+        raise ValueError(
+            f"unknown harness engine {name!r} (supported: {', '.join(sorted(ENGINES))})"
+        )
+    return name
+
+
+def skills_dir_for(engine):
+    """Expanded skills directory for ``engine`` (validates first)."""
+    validate_engine(engine)
+    return os.path.expanduser(ENGINES[engine]["skills_dir"])
+
+
+# Engine-aware skills location (same value as SKILLS_DIR for claude-code).
+# Computed with a safe fallback so a typo'd env var doesn't KeyError at
+# import — validation is deferred to the build/scan call sites above.
+ENGINE_SKILLS_DIR = os.path.expanduser(
+    ENGINES.get(ENGINE, ENGINES["claude-code"])["skills_dir"]
+)
+
 # --- Batch scanning (ad-hoc URL list) ---
 BATCH_CLONE_BASE_DIR = os.path.join(REPO_ROOT, "repos_being_scanned")
 BATCH_REPO_LIST_FILE = os.path.join(HARNESS_DIR, "batch", "REPO_LIST.txt")

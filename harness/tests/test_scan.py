@@ -290,6 +290,52 @@ def test_scan_folder_readonly_appends_prompt(monkeypatch, tmp_path):
     assert "read-only scan" not in captured["prompt"]
 
 
+def test_scan_folder_reads_engine_default_at_call_time(monkeypatch, tmp_path):
+    """The env-var → scan_folder() default engine path (real users hit this).
+
+    scan.py reads ``config.ENGINE`` at call time (not a value bound at
+    import), so a reloaded/overridden config default is honored without
+    passing engine= explicitly. Regression for the ``from .config import
+    ENGINE`` value-binding gap.
+    """
+    import importlib
+
+    from local_harness import config
+
+    folder = tmp_path / "repo"
+    folder.mkdir()
+    hermes_skills = tmp_path / "hermes_skills"
+    hermes_skills.mkdir()
+
+    # Select hermes purely via the env var + config reload — no engine= arg.
+    monkeypatch.setenv("VULNHUNT_HARNESS_ENGINE", "hermes")
+    importlib.reload(config)
+    monkeypatch.setattr(scan.config, "ENGINE", "hermes")
+    monkeypatch.setattr(scan.config, "skills_dir_for", lambda e: str(hermes_skills))
+
+    captured = {}
+
+    def fake_popen(cmd, *a, **k):
+        captured["cmd"] = cmd
+        return _FakePopen([json.dumps({"type": "result"}) + "\n"], returncode=0)
+
+    monkeypatch.setattr(scan.subprocess, "Popen", fake_popen)
+
+    class _NoTimer:
+        def __init__(self, *a, **k):
+            pass
+        def start(self):
+            pass
+        def cancel(self):
+            pass
+    monkeypatch.setattr(scan.threading, "Timer", _NoTimer)
+
+    scan.scan_folder(str(folder))  # no engine= — must default to hermes
+    assert captured["cmd"][0] == "hermes"
+    monkeypatch.delenv("VULNHUNT_HARNESS_ENGINE")
+    importlib.reload(config)
+
+
 def test_scan_folder_timeout(monkeypatch, tmp_path):
     folder = tmp_path / "repo"
     folder.mkdir()
@@ -357,7 +403,7 @@ def test_scan_folder_timeout_with_valid_results_not_discarded(monkeypatch, tmp_p
 def test_scan_folder_with_retry_success_first_try(monkeypatch, tmp_path):
     folder = str(tmp_path / "repo")
     monkeypatch.setattr(scan, "scan_folder",
-                        lambda fp, log_file=None, readonly=False: scan.ScanResult(fp, "repo", 0, 3, 1.0, "rd", {"total_cost_usd": 1}))
+                        lambda fp, log_file=None, readonly=False, engine=None: scan.ScanResult(fp, "repo", 0, 3, 1.0, "rd", {"total_cost_usd": 1}))
     monkeypatch.setattr(scan, "is_rate_limit_failure", lambda p: False)
     result = scan.scan_folder_with_retry(folder)
     assert result.returncode == 0
@@ -367,7 +413,7 @@ def test_scan_folder_with_retry_429_then_success(monkeypatch, tmp_path):
     folder = str(tmp_path / "repo")
     calls = {"n": 0}
 
-    def fake_scan(fp, log_file=None, readonly=False):
+    def fake_scan(fp, log_file=None, readonly=False, engine=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return scan.ScanResult(fp, "repo", 1, 0, 0.5, None, {})
@@ -386,7 +432,7 @@ def test_scan_folder_with_retry_429_then_success(monkeypatch, tmp_path):
 def test_scan_folder_with_retry_429_exhausted(monkeypatch, tmp_path):
     folder = str(tmp_path / "repo")
     monkeypatch.setattr(scan, "scan_folder",
-                        lambda fp, log_file=None, readonly=False: scan.ScanResult(fp, "repo", 1, 0, 0.5, None, {}))
+                        lambda fp, log_file=None, readonly=False, engine=None: scan.ScanResult(fp, "repo", 1, 0, 0.5, None, {}))
     monkeypatch.setattr(scan, "is_rate_limit_failure", lambda p: True)
     monkeypatch.setattr(scan, "clean_prior_results", lambda *a, **k: ["r"])
     monkeypatch.setattr(scan.time, "sleep", lambda s: None)
