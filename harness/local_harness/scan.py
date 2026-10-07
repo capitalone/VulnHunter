@@ -2,7 +2,9 @@
 
 import json
 import os
+import re
 import shutil
+import stat
 import subprocess
 import threading
 import time
@@ -35,13 +37,67 @@ def ts():
     return datetime.now().strftime("%H:%M:%S")
 
 
+# O_NOFOLLOW is POSIX-only; on Windows it is absent and we rely on the
+# lstat/islink checks alone.
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_BINARY = getattr(os, "O_BINARY", 0)
+
+
+def _is_regular_file(path):
+    """True only for a real regular file at `path` (no symlink, FIFO, device...).
+
+    Scan logs live inside the untrusted clone, so a log path may be a planted
+    symlink to a host file or a FIFO that would block a reader forever.
+    """
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def _open_log_for_read(path):
+    """Open a scan log for binary reading without following a final symlink.
+
+    Returns None when the path is not a regular file (absent, symlink, FIFO...).
+    """
+    if not path or not _is_regular_file(path):
+        return None
+    try:
+        fd = os.open(path, os.O_RDONLY | _O_NOFOLLOW | _O_BINARY)
+    except OSError:
+        return None
+    return os.fdopen(fd, "rb")
+
+
+def _open_log_for_write(path):
+    """Create a fresh scan log at `path` without writing through a planted link.
+
+    The log lives inside the untrusted clone: a repo can commit
+    `batch_scan.log -> ~/.zshrc` (or a dangling link to a not-yet-existing
+    host path), and an agent with Bash can leave a hard link there before a
+    retry. open(path, "w") would follow/truncate any of those. Remove whatever
+    is at the path first (unlinking a link never touches its target), then
+    create the file exclusively with O_NOFOLLOW so a link raced into place
+    makes the open fail rather than redirect the write.
+    """
+    if os.path.lexists(path):
+        _remove_results_entry(path)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW
+    fd = os.open(path, flags, 0o644)
+    return os.fdopen(fd, "w")
+
+
 def _tail_lines(path, max_bytes=65536):
     """Return the last lines of a file without loading the whole thing.
 
     Scan logs are JSONL and can grow large over a multi-hour scan; callers only
     need the final `result` event, so reading the trailing window is enough.
+    A log that is not a regular file (e.g. a planted symlink) reads as empty.
     """
-    with open(path, "rb") as f:
+    f = _open_log_for_read(path)
+    if f is None:
+        return []
+    with f:
         f.seek(0, os.SEEK_END)
         size = f.tell()
         f.seek(max(0, size - max_bytes))
@@ -49,16 +105,72 @@ def _tail_lines(path, max_bytes=65536):
     return data.decode("utf-8", errors="replace").splitlines()
 
 
+RESULTS_MARKER = "_VULNHUNT_RESULTS_"
+
+
+def _is_link(path):
+    """True for a symlink, or (Windows, py3.12+) an NTFS junction.
+
+    os.path.islink does not report junctions, so a junction planted in a clone
+    on Windows would otherwise be treated as a real directory. On older Pythons
+    without os.path.isjunction, junctions remain undetected (documented gap).
+    """
+    if os.path.islink(path):
+        return True
+    isjunction = getattr(os.path, "isjunction", None)
+    return bool(isjunction and isjunction(path))
+
+
+def _is_git_tracked(clone_dir, entry):
+    """True if `entry` (relative to clone_dir) has files tracked by git.
+
+    A clone only contains tracked content, so a *_VULNHUNT_RESULTS_* dir that
+    git knows about was committed by the (untrusted) repo, not produced by our
+    scan. If git is unavailable or clone_dir isn't a work tree, return False
+    and fall back to the previous (untracked-assumed) behaviour.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "ls-files", "-z", "--", entry],
+            cwd=clone_dir, capture_output=True, timeout=30,
+        )
+    except Exception:  # git missing, timeout, or a stubbed subprocess layer
+        return False
+    return proc.returncode == 0 and bool(proc.stdout.strip(b"\0"))
+
+
+def _is_scan_results_dir(clone_dir, entry):
+    """True if clone_dir/entry looks like results produced by our own scan.
+
+    Rejects planted symlinks/junctions (isdir follows them, so a link to
+    another dir would be judged/collected/trusted) and dirs the repo committed
+    itself (which would make --resume skip the scan and ship a forged report).
+    """
+    if RESULTS_MARKER not in entry:
+        return False
+    full_path = os.path.join(clone_dir, entry)
+    if _is_link(full_path) or not os.path.isdir(full_path):
+        return False
+    return not _is_git_tracked(clone_dir, entry)
+
+
 def find_results_dir(clone_dir):
-    """Find the *_VULNHUNT_RESULTS_* directory inside a cloned repo."""
+    """Find the *_VULNHUNT_RESULTS_* directory our scan produced in a cloned repo.
+
+    Planted symlinks and repo-committed results dirs are skipped.
+    """
     if not os.path.isdir(clone_dir):
         return None
-    for entry in os.listdir(clone_dir):
-        if "_VULNHUNT_RESULTS_" in entry:
-            full_path = os.path.join(clone_dir, entry)
-            if os.path.isdir(full_path):
-                return full_path
+    for entry in sorted(os.listdir(clone_dir)):
+        if _is_scan_results_dir(clone_dir, entry):
+            return os.path.join(clone_dir, entry)
     return None
+
+
+def _is_valid_readme(results_dir):
+    readme = os.path.join(results_dir, "README.md")
+    # A symlinked README would have the judge/resume read an arbitrary host file.
+    return _is_regular_file(readme) and os.lstat(readme).st_size > 100
 
 
 def has_valid_results(clone_dir):
@@ -66,8 +178,29 @@ def has_valid_results(clone_dir):
     results_dir = find_results_dir(clone_dir)
     if not results_dir:
         return False
-    readme = os.path.join(results_dir, "README.md")
-    return os.path.isfile(readme) and os.path.getsize(readme) > 100
+    return _is_valid_readme(results_dir)
+
+
+def _remove_results_entry(path):
+    """Remove a results entry safely.
+
+    An untrusted cloned repo can plant a symlink named *_VULNHUNT_RESULTS_*
+    pointing at a directory. os.path.isdir follows symlinks, so the old cleanup
+    code reached shutil.rmtree(<symlink>), which raises
+    "Cannot call rmtree on a symbolic link" — an unhandled OSError that aborts
+    the entire scan/batch run (CANON-34, availability DoS). Unlink the planted
+    symlink (never its target); only rmtree real directories.
+    """
+    if os.path.islink(path):
+        os.unlink(path)
+    elif _is_link(path):
+        # NTFS junction (Windows): rmdir removes the junction, not its target.
+        os.rmdir(path)
+    elif os.path.isdir(path):
+        shutil.rmtree(path)
+    elif os.path.lexists(path):
+        # Regular file, FIFO, socket, ... — just drop the name.
+        os.remove(path)
 
 
 def clean_incomplete_results(clone_dir, log_filename="benchmark_scan.log"):
@@ -81,15 +214,20 @@ def clean_incomplete_results(clone_dir, log_filename="benchmark_scan.log"):
     for entry in os.listdir(clone_dir):
         if "_VULNHUNT_RESULTS_" in entry:
             full_path = os.path.join(clone_dir, entry)
-            if not os.path.isdir(full_path):
+            is_link = _is_link(full_path)
+            if not is_link and not os.path.isdir(full_path):
                 continue
-            readme = os.path.join(full_path, "README.md")
-            if not (os.path.isfile(readme) and os.path.getsize(readme) > 100):
-                shutil.rmtree(full_path)
+            # A planted symlink or a results dir committed in the repo is never
+            # a valid results dir of ours; remove it (without following links)
+            # so a resume re-scans cleanly.
+            if (is_link or not _is_scan_results_dir(clone_dir, entry)
+                    or not _is_valid_readme(full_path)):
+                _remove_results_entry(full_path)
                 removed.append(entry)
                 log_file = os.path.join(clone_dir, log_filename)
-                if os.path.isfile(log_file):
-                    os.remove(log_file)
+                # lexists, not isfile: isfile misses a dangling planted link.
+                if os.path.lexists(log_file):
+                    _remove_results_entry(log_file)
     return removed
 
 
@@ -104,19 +242,20 @@ def clean_prior_results(clone_dir, log_filename="benchmark_scan.log"):
     for entry in os.listdir(clone_dir):
         if "_VULNHUNT_RESULTS_" in entry:
             full_path = os.path.join(clone_dir, entry)
-            if os.path.isdir(full_path):
-                shutil.rmtree(full_path)
+            if _is_link(full_path) or os.path.isdir(full_path):
+                _remove_results_entry(full_path)
                 removed.append(entry)
     log_file = os.path.join(clone_dir, log_filename)
-    if os.path.isfile(log_file):
-        os.remove(log_file)
+    # lexists, not isfile: isfile misses a dangling planted link.
+    if os.path.lexists(log_file):
+        _remove_results_entry(log_file)
         removed.append(log_filename)
     return removed
 
 
 def is_rate_limit_failure(log_file_path):
     """Check if a scan failed due to 429 rate limiting by inspecting the final result event."""
-    if not log_file_path or not os.path.isfile(log_file_path):
+    if not log_file_path or not _is_regular_file(log_file_path):
         return False
     try:
         lines = _tail_lines(log_file_path)
@@ -142,7 +281,7 @@ def extract_cost_from_log(log_file_path):
     cache_read_tokens, cache_creation_tokens, duration_api_ms, num_turns,
     or empty dict if not found.
     """
-    if not log_file_path or not os.path.isfile(log_file_path):
+    if not log_file_path or not _is_regular_file(log_file_path):
         return {}
     try:
         lines = _tail_lines(log_file_path)
@@ -174,7 +313,93 @@ def extract_cost_from_log(log_file_path):
     return {}
 
 
-def scan_folder(folder_path, log_file=None, readonly=False):
+def _run_git(folder_path, *args):
+    """Run ``git <args>`` in folder_path; return stripped stdout or "" on any failure."""
+    try:
+        out = subprocess.run(["git", *args], cwd=folder_path,
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def _normalize_repo_url(raw):
+    """Rewrite SSH to HTTPS, strip basic-auth userinfo and a trailing .git."""
+    url = raw.strip()
+    ssh = re.match(r"^git@([^:]+):(.+)$", url)
+    if ssh:
+        url = f"https://{ssh.group(1)}/{ssh.group(2)}"
+    url = re.sub(r"^(https?://)[^/@]+@", r"\1", url)
+    return url[:-len(".git")] if url.endswith(".git") else url
+
+
+def git_metadata(folder_path):
+    """Return (branch_label, repo_url) for the scan README header.
+
+    Mirrors vulnhunter-agent's pre-resolution so the skill never has to run
+    git itself: branch_label is "<branch> [<short-sha>]" or "unknown";
+    repo_url is the normalized origin URL, else the folder basename.
+    """
+    branch = _run_git(folder_path, "rev-parse", "--abbrev-ref", "HEAD")
+    sha = _run_git(folder_path, "rev-parse", "--short", "HEAD")
+    branch_label = f"{branch} [{sha}]" if branch and sha else "unknown"
+    repo_url = _normalize_repo_url(_run_git(folder_path, "remote", "get-url", "origin"))
+    return branch_label, repo_url or os.path.basename(folder_path)
+
+
+def create_results_dir(folder_path):
+    """Create a fresh <folder>/<basename>_VULNHUNT_RESULTS_<YYYY-MM-DD-HHMMSS> dir.
+
+    Same naming the skill uses when it has Bash. os.mkdir (not makedirs) fails
+    rather than reuse an existing dir.
+    """
+    stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    results_dir = os.path.join(
+        folder_path, f"{os.path.basename(folder_path)}_VULNHUNT_RESULTS_{stamp}")
+    os.mkdir(results_dir)
+    return results_dir
+
+
+def build_scan_prompt(folder_path, results_dir, branch_label, repo_url, readonly):
+    """Compose the /vulnhunt kickoff prompt with a "Pre-resolved scan metadata" block.
+
+    The block is what SKILL.md path A consumes, so a headless scan with no Bash
+    doesn't stall asking the user for a results dir and git metadata.
+    """
+    prompt = (
+        f"/vulnhunt {folder_path}\n\n"
+        "IMPORTANT: This is running in non-interactive headless mode. "
+        "Do NOT ask for approval or confirmation. Execute immediately."
+    )
+    if readonly:
+        prompt += (
+            "  Perform a read-only scan, skip instructions related to "
+            "getting dependencies and executing code"
+        )
+        bash_line = "Bash is NOT available — use Read/Write/Edit/Grep/Glob only."
+    else:
+        bash_line = "Bash is AVAILABLE for exploit-test execution (--execute was passed)."
+    return (
+        f"{prompt}\n\n"
+        "Pre-resolved scan metadata (use these literal values — do NOT "
+        "run shell commands to recompute them):\n"
+        f"- VULNHUNT_DIR: {results_dir}\n"
+        f"- VULNHUNT_BRANCH: {branch_label}\n"
+        f"- Repository URL: {repo_url}\n"
+        f"- {bash_line}"
+    )
+
+
+def _abs_path_rule(tool, path):
+    """Permission rule for everything under path ("//" anchors at filesystem root).
+
+    realpath so the rule matches the path the CLI resolves (e.g. macOS
+    /tmp -> /private/tmp).
+    """
+    return f"{tool}(//{os.path.realpath(path).lstrip('/')}/**)"
+
+
+def scan_folder(folder_path, log_file=None, readonly=True):
     """Run vulnhunt on one folder, stream events to a log file.
 
     Returns a ScanResult (folder_path, label, returncode, event_count,
@@ -189,29 +414,48 @@ def scan_folder(folder_path, log_file=None, readonly=False):
         print(f"  [{ts()}] [{label}] Error: Skill not installed. Run install.sh first.")
         return ScanResult(folder_path, label, 1, 0, 0, None, {})
 
-    prompt = (
-        f"/vulnhunt {folder_path}\n\n"
-        "IMPORTANT: This is running in non-interactive headless mode. "
-        "Do NOT ask for approval or confirmation. Execute immediately."
-    )
-    if readonly:
-        prompt += (
-            "  Perform a read-only scan, skip instructions related to "
-            "getting dependencies and executing code"
-        )
+    results_dir = create_results_dir(folder_path)
+    branch_label, repo_url = git_metadata(folder_path)
+    prompt = build_scan_prompt(folder_path, results_dir, branch_label, repo_url, readonly)
 
     print(f"  [{ts()}] [{label}] STARTING scan", flush=True)
     start = time.time()
+
+    # CANON-03: scanning an untrusted repo is read-only BY DEFAULT so that
+    # prompt-injected content in the scanned repo cannot drive host command
+    # execution or tamper with the host.
+    #
+    # - --tools is the hard boundary on which tools exist at all: no Bash
+    #   (--allowedTools only pre-approves; it does not remove tools).
+    # - --permission-mode default + no bare Read/Write/Edit in --allowedTools:
+    #   reads are limited to the cwd and --add-dir roots (clone, skill, phases)
+    #   and the only pre-approved write target is the pre-created results dir.
+    #   Anything else needs a prompt, which headless -p mode denies.
+    # - --setting-sources user (CANON-19): don't load the clone's
+    #   .claude/settings*.json, whose hooks would otherwise run on the host.
+    # - --strict-mcp-config: --tools only limits built-ins; without this the
+    #   user's MCP servers (incl. claude.ai connectors) stay callable, which is
+    #   an exfiltration channel.
+    #
+    # --execute (readonly=False) is for trusted code only: it keeps the
+    # historical acceptEdits + Bash grant, still without project settings/MCP.
+    if readonly:
+        tool_args = ["--tools", "Read,Write,Edit,Grep,Glob,Agent",
+                     "--permission-mode", "default",
+                     "--allowedTools", _abs_path_rule("Edit", results_dir), "Agent"]
+    else:
+        tool_args = ["--allowedTools", "Read", "Write", "Edit", "Bash", "Agent",
+                     "--permission-mode", "acceptEdits"]
 
     proc = subprocess.Popen(
         ["claude", "-p", prompt,
          "--output-format", "stream-json",
          "--verbose",
-         "--allowedTools", "Read", "Write", "Edit", "Bash", "Agent",
-         "--permission-mode", "acceptEdits",
+         *tool_args,
+         "--setting-sources", "user",
+         "--strict-mcp-config",
          "--model", MODEL,
          "--add-dir", folder_path,
-         "--add-dir", os.path.dirname(folder_path),
          "--add-dir", SKILLS_DIR,
          "--add-dir", PHASES_DIR],
         stdout=subprocess.PIPE,
@@ -235,7 +479,7 @@ def scan_folder(folder_path, log_file=None, readonly=False):
     timer = threading.Timer(SCAN_TIMEOUT, _kill_on_timeout)
     timer.start()
     try:
-        with open(log_file, "w") as log:
+        with _open_log_for_write(log_file) as log:
             for line in proc.stdout:
                 line = line.strip()
                 if not line:
@@ -259,7 +503,7 @@ def scan_folder(folder_path, log_file=None, readonly=False):
 
     # A process that completed right as the timer fired can be flagged timed_out
     # even though it emitted a full result; don't discard a valid scan's data.
-    if timed_out and has_valid_results(folder_path):
+    if timed_out and _is_valid_readme(results_dir):
         timed_out = False
 
     if timed_out:
@@ -276,11 +520,13 @@ def scan_folder(folder_path, log_file=None, readonly=False):
         print(f"  [{ts()}] [{label}] FINISHED in {elapsed:.0f}s "
               f"(exit {proc.returncode}, {event_count} events{cost_str}{tokens_str})", flush=True)
 
-    results_dir = find_results_dir(folder_path)
+    # The dir is pre-created, so report it only once the scan wrote something.
+    if not os.listdir(results_dir):
+        results_dir = None
     return ScanResult(folder_path, label, proc.returncode, event_count, elapsed, results_dir, cost_data)
 
 
-def scan_folder_with_retry(folder_path, log_filename=None, readonly=False):
+def scan_folder_with_retry(folder_path, log_filename=None, readonly=True):
     """Wrap scan_folder with retry on 429 rate limit failures.
 
     Returns: Same ScanResult as scan_folder, with elapsed summed across attempts.
@@ -317,7 +563,7 @@ def scan_folder_with_retry(folder_path, log_filename=None, readonly=False):
         return result._replace(elapsed=total_elapsed)
 
 
-def scan_targets(targets, max_workers=None, status_interval=300, log_filename=None, readonly=False):
+def scan_targets(targets, max_workers=None, status_interval=300, log_filename=None, readonly=True):
     """Scan a list of benchmark targets in parallel with 429 retry.
 
     targets: list of dicts with at least 'clone_dir' and 'key' fields.

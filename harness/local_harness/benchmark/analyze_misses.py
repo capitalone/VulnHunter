@@ -259,14 +259,20 @@ def invoke_diagnostic(finding, phase_key, evidence, results_dir, repo_dir):
 
     print(f"    [{fid}] Invoking claude ({MODEL}) in agentic mode, timeout 1200s ...", flush=True)
 
+    # No Bash at all: prefix rules like Bash(cat:*) still go through a shell, and
+    # the prompt carries scanned-repo-derived text. Read/Grep/Glob cover the
+    # investigation; --permission-mode default confines them to the --add-dir
+    # roots, --setting-sources user skips any project settings/hooks, and
+    # --strict-mcp-config drops MCP servers (another exfiltration channel).
     cmd = [
         "claude", "-p", prompt,
         "--output-format", "text",
         "--model", MODEL,
         "--system-prompt", DIAGNOSTIC_SYSTEM_PROMPT,
-        "--allowedTools", "Read", "Bash(grep:*)", "Bash(wc:*)", "Bash(ls:*)",
-        "Bash(find:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(cat:*)",
-        "--permission-mode", "acceptEdits",
+        "--tools", "Read,Grep,Glob",
+        "--permission-mode", "default",
+        "--setting-sources", "user",
+        "--strict-mcp-config",
         "--add-dir", repo_dir,
         "--add-dir", results_dir,
         "--add-dir", os.path.join(REPO_ROOT, "skill", "phases"),

@@ -60,6 +60,24 @@ python -m local_harness.batch.run status               # check progress
 python -m local_harness.batch.run collect              # gather results into to_upload/
 ```
 
+### Read-only by default
+
+Scanned repos are untrusted, so scans (batch and benchmark) run read-only
+unless you pass `--execute`. The harness pre-creates the
+`<clone>/<clone>_VULNHUNT_RESULTS_<timestamp>` dir and passes it, plus branch
+and origin URL, to the skill. It then runs `claude -p` with:
+
+- `--tools Read,Write,Edit,Grep,Glob,Agent`: no Bash, WebFetch or WebSearch.
+- `--permission-mode default`, where only writes under the results dir are
+  pre-approved. Reads stay inside the clone and the skill dirs. Anything else
+  would need a prompt, which headless mode denies.
+- `--setting-sources user`, so the clone's own `.claude/settings*.json` and its
+  hooks are never loaded.
+- `--strict-mcp-config`, so no MCP servers or claude.ai connectors are loaded.
+
+`--execute` re-grants Bash under `acceptEdits` so the skill can install
+dependencies and run exploit tests. Use it only on code you trust.
+
 ## Benchmarking
 
 Ground truth lives in `local_harness/benchmark/ground_truth/*.json` — one file
@@ -73,6 +91,7 @@ python -m local_harness.benchmark.run                  # full run: clone + scan 
 python -m local_harness.benchmark.run --repos "name"   # single repo (substring match)
 python -m local_harness.benchmark.run --judge-only --force-rejudge   # re-judge without re-scanning
 python -m local_harness.benchmark.run --tally-only     # regenerate the report from saved state
+python -m local_harness.benchmark.run --execute        # let the scan run code (trusted corpora only)
 
 python -m local_harness.benchmark.analyze_misses               # diagnose all missed findings
 python -m local_harness.benchmark.analyze_misses --finding ID  # a single finding

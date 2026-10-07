@@ -134,10 +134,14 @@ def annotate_clusters_json(payload: dict[str, Any]) -> dict[str, Any]:
         )
         for c in raw
     ]
+    # `name` is not unique (the documented "Other clusters" overflow slot can
+    # appear twice), so pair each Cluster with its source dict by identity,
+    # not by re-deriving it from a name lookup after sorting.
+    original_by_id = {id(cluster): c for cluster, c in zip(clusters, raw)}
     sorted_clusters = sort_clusters(clusters)
     out_clusters = []
     for i, c in enumerate(sorted_clusters):
-        original = next(r for r in raw if r.get("name") == c.name)
+        original = original_by_id[id(c)]
         annotated = dict(original)
         annotated["score"] = c.score
         annotated["recommended"] = (i == 0)

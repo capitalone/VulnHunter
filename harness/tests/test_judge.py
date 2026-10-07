@@ -1,5 +1,6 @@
 """Tests for local_harness.benchmark.judge."""
 
+import os
 import subprocess
 import types
 
@@ -18,6 +19,17 @@ FINDINGS = [
 
 def test_read_results_report_missing(tmp_path):
     assert judge.read_results_report(str(tmp_path)) is None
+
+
+def test_read_results_report_ignores_symlinked_readme(tmp_path):
+    # The results dir is written by an agent working on untrusted code; a
+    # README.md symlinked to a host file must not be read and sent to the judge.
+    host = tmp_path / "host_secret"
+    host.write_text("TOP SECRET")
+    rd = tmp_path / "rd"
+    rd.mkdir()
+    os.symlink(str(host), str(rd / "README.md"))
+    assert judge.read_results_report(str(rd)) is None
 
 
 def test_read_results_report(tmp_path):

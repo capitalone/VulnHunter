@@ -149,6 +149,30 @@ def test_invoke_diagnostic_success(monkeypatch):
     assert out["root_cause"] == "rc"
 
 
+def test_invoke_diagnostic_no_bash(monkeypatch):
+    """The diagnostic prompt carries scanned-repo-derived text, so the session
+    gets no Bash at all (prefix rules like Bash(cat:*) still run via a shell):
+    only Read/Grep/Glob, confined to the --add-dir roots, with no project
+    settings or MCP servers loaded.
+    """
+    captured = {}
+
+    def fake_run(cmd, *a, **k):
+        captured["cmd"] = cmd
+        return _proc(0, stdout='{"root_cause":"rc"}')
+
+    monkeypatch.setattr(am.subprocess, "run", fake_run)
+    finding = {"finding_id": "F1", "type": "SQLi", "description": "d", "repo_name": "r"}
+    am.invoke_diagnostic(finding, "phase1", "ev", "/rd", "/repo")
+    cmd = captured["cmd"]
+    assert not any("Bash" in tok for tok in cmd), cmd
+    assert cmd[cmd.index("--tools") + 1] == "Read,Grep,Glob"
+    assert cmd[cmd.index("--permission-mode") + 1] == "default"
+    assert cmd[cmd.index("--setting-sources") + 1] == "user"
+    assert "--strict-mcp-config" in cmd
+    assert "--allowedTools" not in cmd
+
+
 def test_invoke_diagnostic_timeout(monkeypatch):
     def boom(*a, **k):
         raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
