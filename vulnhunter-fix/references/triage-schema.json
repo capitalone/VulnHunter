@@ -46,8 +46,8 @@
     },
     "graph_backend": {
       "type": "string",
-      "enum": ["ast", "grep", "none"],
-      "description": "Provenance of the sidecar data. Must be 'grep' whenever confidence=='low' and 'ast' whenever confidence=='high'."
+      "enum": ["ast", "grep", "lsp", "none"],
+      "description": "Provenance of the sidecar data. Must be 'grep' whenever confidence=='low' and 'ast' or 'lsp' whenever confidence=='high'."
     },
     "generated_at": {
       "type": "string",
@@ -89,7 +89,7 @@
       },
       "then": {
         "properties": {
-          "graph_backend": {"const": "ast"}
+          "graph_backend": {"enum": ["ast", "lsp"]}
         },
         "required": ["graph_backend"]
       }

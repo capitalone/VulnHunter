@@ -134,6 +134,23 @@ claude --model opus --add-dir ~/.claude/skills/vulnhunt-fix-verify \
 /vulnhunt-fix-verify repo=<abs_path> report=<abs_path> fixed=VULN-001,... out=<abs_path> [comments=<abs_path>] [additional_repos=<path1>,<path2>]
 ```
 
+### 4. Language Server Protocol (LSP) Configuration (Optional)
+
+LSP provides semantic type-aware call hierarchy resolution, eliminating regex text-match noise from comments and docstrings.
+
+- **For Scanner (`/vulnhunt`)**: Install LSP plugins in Claude Code:
+  ```bash
+  claude plugin install pyright-lsp     # Python
+  # claude plugin install typescript-lsp # TypeScript
+  ```
+  When present, trace agents automatically use the `LSP` tool (`prepareCallHierarchy` + `incomingCalls`) to trace caller reachability, with **Grep** as an unskippable cross-check (`method: lsp+grep`).
+
+- **For Fixer (`/vulnhunter-fix`)**: Install local language servers (`npm install -g pyright` for Python, `gopls` for Go) and enable the LSP backend at runtime:
+  ```bash
+  VULNFIX_GRAPH_BACKEND=lsp python vulnhunter-fix/scripts/build_graph.py --repo-root <path> --work-dir <path> --findings <path>
+  ```
+  This emits sidecars with `confidence: "high"` and `graph_backend: "lsp"`. If LSP is absent or errors, VulnHunter degrades gracefully to baseline Grep (`confidence: "low"`).
+
 ---
 
 ## Automation & Scale

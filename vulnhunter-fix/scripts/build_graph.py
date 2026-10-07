@@ -27,13 +27,17 @@ import _skill_bootstrap  # noqa: F401  — adds bundled .venv site-packages to s
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from vulnhunter_fix.graph.build import build_or_load
 from vulnhunter_fix.graph.query import GraphQuery
+from vulnhunter_fix.graph.lsp_backend import select_backend
+from vulnhunter_fix.graph.config import language_for_path
 
 
 VULN_ID_RE = re.compile(r"VULN-\d+", re.IGNORECASE)
@@ -61,7 +65,14 @@ def _sink_symbol_from_finding(finding: dict) -> str | None:
     return str(loc).strip()
 
 
-def _build_sidecar(query: GraphQuery, finding: dict, doc_backend: str, doc_version: str | None) -> dict:
+def _build_sidecar(
+    query: GraphQuery,
+    finding: dict,
+    doc_backend: str,
+    doc_version: str | None,
+    repo_root: Path | None = None,
+    opt_backend: str = "auto"
+) -> dict:
     """Emit one triage-schema.json-compatible sidecar for a single finding."""
     vuln_id = finding.get("id") or finding.get("vuln_id") or ""
     m = VULN_ID_RE.search(str(vuln_id))
@@ -70,24 +81,57 @@ def _build_sidecar(query: GraphQuery, finding: dict, doc_backend: str, doc_versi
     vuln_id = m.group(0).upper()
 
     sink_symbol = _sink_symbol_from_finding(finding)
+    active_query: GraphQuery | Any = query
+    active_backend = doc_backend
+
+    if opt_backend == "lsp" and repo_root and sink_symbol:
+        file_path = sink_symbol.split(":")[0]
+        lang = language_for_path(repo_root / file_path) or "python"
+        lsp_q = select_backend(str(repo_root), lang)
+        if lsp_q:
+            active_query = lsp_q
+            active_backend = "lsp"
+
     callers: list[str] = []
     blast_radius: list[str] = []
+    reachable_from_entry: bool | None = None
+
     if sink_symbol:
         try:
-            callers = [c for c in query.callers_of(sink_symbol) or [] if c]
+            raw_callers = active_query.callers_of(sink_symbol) or []
+            if isinstance(raw_callers, list):
+                callers = []
+                for c in raw_callers:
+                    if isinstance(c, dict):
+                        file_part = c.get("file") or ""
+                        sym_part = c.get("symbol") or ""
+                        callers.append(f"{file_part}:{sym_part}" if file_part and sym_part else str(c))
+                    elif c:
+                        callers.append(str(c))
         except Exception:
+            if active_backend == "lsp":
+                active_backend = "grep"
+                active_query = query
             callers = []
+
         try:
-            # blast_radius returns {"confidence", "file", "reachable_files": [...]}.
-            # list(<dict>) yields the *keys*, not the reachable files — the sidecar
-            # then held the three literal key strings instead of file paths.
-            br = query.blast_radius(sink_symbol) or {}
-            blast_radius = list(br.get("reachable_files") or [])
+            br = active_query.blast_radius(sink_symbol) or {}
+            blast_radius = list(br.get("reachable_files") or br.get("affected_files") or [])
         except Exception:
             blast_radius = []
 
-    confidence = "high" if doc_backend == "ast" else "low"
-    graph_backend = doc_backend if doc_backend in ("ast", "grep", "none") else "grep"
+        entry_point = finding.get("entry_point")
+        if entry_point and isinstance(entry_point, str):
+            try:
+                parts = entry_point.split(":")
+                file_part = parts[0]
+                line_part = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+                reachable_from_entry = bool(active_query.reachable_from(file_part, line_part, sink_symbol))
+            except Exception:
+                reachable_from_entry = None
+
+    confidence = "high" if active_backend in ("ast", "lsp") else "low"
+    graph_backend = active_backend if active_backend in ("ast", "grep", "lsp", "none") else "grep"
 
     sidecar = {
         "vuln_id": vuln_id,
@@ -95,10 +139,10 @@ def _build_sidecar(query: GraphQuery, finding: dict, doc_backend: str, doc_versi
         "sink_symbol": sink_symbol,
         "callers_of_sink": callers,
         "blast_radius": blast_radius,
-        "reachable_from_entry": None,
+        "reachable_from_entry": reachable_from_entry,
         "graph_backend": graph_backend,
         "generated_at": _now(),
-        "graphifyy_version": doc_version if confidence == "high" else None,
+        "graphifyy_version": doc_version if confidence == "high" and active_backend == "ast" else None,
     }
     return sidecar
 
@@ -161,12 +205,16 @@ def main(argv: list[str]) -> int:
     sidecar_dir = work_dir / "graph_context"
     sidecar_dir.mkdir(parents=True, exist_ok=True)
 
+    opt_backend = os.environ.get("VULNFIX_GRAPH_BACKEND", "auto").lower()
     query = GraphQuery(doc)
     written: list[str] = []
     errors: list[str] = []
     for finding in findings:
         try:
-            sidecar = _build_sidecar(query, finding, doc.backend, doc.graphify_version)
+            sidecar = _build_sidecar(
+                query, finding, doc.backend, doc.graphify_version,
+                repo_root=repo_root, opt_backend=opt_backend
+            )
         except ValueError as exc:
             errors.append(str(exc))
             continue
