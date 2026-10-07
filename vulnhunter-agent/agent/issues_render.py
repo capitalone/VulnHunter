@@ -101,6 +101,35 @@ def render_title(f: Finding) -> str:
 _MD_ESCAPE_CHARS = ("\\", "`", "[", "]")
 
 
+# Machine-readable footer markers (``<!-- vulnhunt-finding-id: ... -->`` etc.)
+# are intentionally NOT html.escaped so the marker regexes stay exact. But the
+# values (``f.id``, ``report.results_dir_name``) are attacker-influenced
+# LLM/scan-README data, so a value containing ``-->`` would close the comment
+# and inject arbitrary markdown/HTML (CWE-79 / CWE-116). Restrict marker values
+# to a strict identifier charset — the same class the downstream parsers accept
+# (``VULN-\d{3}`` / ``[A-Za-z0-9._-]+_VULNHUNT_RESULTS_...``) — dropping any
+# other char. Removing '<' and '>' makes a comment breakout impossible while
+# keeping legitimate ids/dir-names intact.
+_MARKER_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _sanitize_marker_value(value: str, marker: str = "marker") -> str:
+    """Restrict an HTML-comment marker value to a safe identifier charset so it
+    cannot break out of the surrounding ``<!-- ... -->`` (CWE-116).
+
+    Stripping can turn a value into a *different* identifier (e.g. a
+    results-dir name that now points at another directory), so any change is
+    logged as a warning rather than happening silently."""
+    raw = value or ""
+    cleaned = _MARKER_UNSAFE_RE.sub("", raw)
+    if cleaned != raw:
+        logger.warning(
+            "Stripped out-of-charset characters from %s marker value: %r -> %r",
+            marker, raw, cleaned,
+        )
+    return cleaned
+
+
 def _sanitize_for_issue_body(value: str) -> str:
     """Neutralize attacker-influenced Finding text before it lands in a
     GitHub issue body (CWE-79).
@@ -118,6 +147,40 @@ def _sanitize_for_issue_body(value: str) -> str:
     return s
 
 
+def _sanitize_inline(value: str) -> str:
+    """``_sanitize_for_issue_body`` for fields rendered on a single line —
+    the ``### Finding`` table cells and the H2 title / Priority line.
+
+    Additionally escapes ``|`` as ``\\|`` (GFM's in-cell pipe escape; it
+    renders as a plain ``|`` outside a table too) so a value cannot add or
+    forge table cells, and collapses CR/LF runs to one space so it cannot end
+    the row/heading and inject block markdown (PR #9 review, CWE-116).
+    Multi-line free-form sections keep using ``_sanitize_for_issue_body``.
+    """
+    s = _sanitize_for_issue_body(value).replace("|", "\\|")
+    return re.sub(r"[\r\n]+", " ", s)
+
+
+_PLACEHOLDER_RE = re.compile(r"\{([A-Z_]+)\}")
+
+
+def _substitute(template: str, fields: dict[str, str]) -> tuple[str, set[str]]:
+    """Fill ``{NAME}`` placeholders in ONE pass over the template.
+
+    Field-by-field ``str.replace`` re-scanned already-substituted values, so
+    attacker text containing e.g. ``{IDEMPOTENCY_KEY}`` was expanded by a
+    later pass. Returns (body, template placeholders with no field)."""
+    missing: set[str] = set()
+
+    def repl(m: re.Match[str]) -> str:
+        if m.group(1) in fields:
+            return fields[m.group(1)]
+        missing.add(m.group(1))
+        return m.group(0)
+
+    return _PLACEHOLDER_RE.sub(repl, template), missing
+
+
 def render_body(
     f: Finding,
     *,
@@ -132,14 +195,17 @@ def render_body(
     anchor = _github_anchor(f"{f.id}: {f.title}") if f.id else ""
     deep_link = f"{report_url}#{anchor}" if anchor else report_url
     fields = {
-        # Attacker-influenced Finding fields — sanitized (CWE-79).
-        "TITLE": _sanitize_for_issue_body(f.title or "(untitled)"),
-        "CWE": _sanitize_for_issue_body(f.cwe or "Unknown CWE"),
-        "CWE_NAME": _sanitize_for_issue_body(f.cwe_name or "(unspecified)"),
-        "SEVERITY": _sanitize_for_issue_body(f.severity or "Unspecified"),
-        "LOCATION": _sanitize_for_issue_body(f.location or "(not specified)"),
-        "ROOT_CAUSE": _sanitize_for_issue_body(f.root_cause or "(not specified)"),
-        "DATA_FLOW": _sanitize_for_issue_body(f.data_flow or "(not specified)"),
+        # Attacker-influenced Finding fields — sanitized (CWE-79). Fields that
+        # render on a single line (``### Finding`` table cells, the H2 title,
+        # the Priority line) also get '|' escaped and CR/LF collapsed.
+        "TITLE": _sanitize_inline(f.title or "(untitled)"),
+        "CWE": _sanitize_inline(f.cwe or "Unknown CWE"),
+        "CWE_NAME": _sanitize_inline(f.cwe_name or "(unspecified)"),
+        "SEVERITY": _sanitize_inline(f.severity or "Unspecified"),
+        "LOCATION": _sanitize_inline(f.location or "(not specified)"),
+        "ROOT_CAUSE": _sanitize_inline(f.root_cause or "(not specified)"),
+        "DATA_FLOW": _sanitize_inline(f.data_flow or "(not specified)"),
+        # Free-form multi-line sections — newlines are legitimate here.
         "EXPLOIT_DESCRIPTION": _sanitize_for_issue_body(
             f.exploit_description or "(not specified in report)"
         ),
@@ -155,23 +221,21 @@ def render_body(
         "SCAN_DATE": report.scan_date,
         "REPORT_URL": deep_link,
         "REPORT_ACCESS_MESSAGE": _report_access_message(),
-        "IDEMPOTENCY_KEY": f.vulnfix_key,
-        "VULN_ID": f.id,
-        "RESULTS_DIR_NAME": report.results_dir_name,
+        # Marker values are NOT html.escaped (keeps the marker regexes exact)
+        # but ARE restricted to a safe identifier charset so an attacker-
+        # influenced value cannot break out of the HTML comment (CWE-116).
+        "IDEMPOTENCY_KEY": _sanitize_marker_value(f.vulnfix_key, "vulnfix-key"),
+        "VULN_ID": _sanitize_marker_value(f.id, "vulnhunt-finding-id"),
+        "RESULTS_DIR_NAME": _sanitize_marker_value(
+            report.results_dir_name, "vulnhunt-results-dir"
+        ),
     }
-    body = template
-    for key, value in fields.items():
-        body = body.replace("{" + key + "}", value)
-    leftovers = _find_placeholders(body)
+    body, leftovers = _substitute(template, fields)
     if leftovers:
         logger.warning(
             "Template placeholders unfilled in rendered body: %s", sorted(leftovers)
         )
     return body
-
-
-def _find_placeholders(body: str) -> set[str]:
-    return set(re.findall(r"\{([A-Z_]+)\}", body))
 
 
 @dataclass(frozen=True)
@@ -251,10 +315,7 @@ def _render_clean_scan(ctx: CleanScanContext, template_path: Path) -> str:
         "SKILL_VERSION": ctx.skill_version or "unknown",
         "REPORT_URL_LINE": report_line,
     }
-    body = template
-    for key, value in fields.items():
-        body = body.replace("{" + key + "}", value)
-    leftovers = _find_placeholders(body)
+    body, leftovers = _substitute(template, fields)
     if leftovers:
         logger.warning(
             "Clean-scan template placeholders unfilled: %s", sorted(leftovers)

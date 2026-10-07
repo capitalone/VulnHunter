@@ -18,6 +18,12 @@ via `render_verification_table`), workers MUST emit these exact 9 headers
 in this order — any drift (renaming, dropping `#`, adding a `Sink`
 column) is rejected at delivery time by `scripts/validate-verification.py`.
 
+Every row MUST have exactly nine cells. A literal `|` inside a cell is
+written `\|` (GFM's in-cell escape) and a cell never contains a line break;
+`render_verification_table` does both via `_escape_table_cell`. The
+validator splits only on unescaped pipes and rejects (exit 1, naming the row)
+any row whose cell count differs from the header — rows are never skipped.
+
 ## Cell values (REQ-GRA-012)
 
 Each cell is one of the following literal strings:

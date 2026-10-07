@@ -7,7 +7,7 @@ Public surface:
 
 - Constants: ``HAND_WAVE_PATTERNS``, ``TIER_ONE_LINERS``, ``SAFE_PHRASE_PATTERNS``
 - Exceptions: ``HonestyGuardError``, ``HandWaveResidualError``,
-  ``EmptyResidualError``, ``FullTierWithResidualsError``
+  ``EmptyResidualError``, ``FullTierWithResidualsError``, ``UnknownTierError``
 - Guards: ``check_hand_wave``, ``check_tier_residual_consistency``
 - Renderers: ``render_residual_risk_section``, ``render_pr_body_with_residuals``
 - Helpers: ``pr_draft_state_for_tier``, ``cwe_to_descriptor``,
@@ -26,7 +26,51 @@ now import from this module.
 from __future__ import annotations
 
 import hashlib
+import html
 import re
+
+
+# CANON-44: residual_vectors entries are LLM/finding-derived and get
+# interpolated into the '## Residual Risk' markdown appended to the PR/issue
+# body. The hand-wave / consistency guards reject vague or empty entries but do
+# NOT escape, so an entry could carry raw HTML (``<script>``) or a markdown
+# link (``[x](javascript:...)``) into the rendered body (CWE-79 / CWE-116).
+# Neutralize each entry so metacharacters render as literal text: html.escape
+# handles angle brackets / ampersands; backslash-escaping the markdown
+# link/code metacharacters neutralizes ``[text](url)`` and inline code.
+_RESIDUAL_MD_ESCAPE_CHARS = ("\\", "`", "[", "]")
+
+# GitHub turns ``@user`` / ``@org/team`` into notifying mentions and bare
+# ``scheme://`` / ``www.`` text into live links. A zero-width-space character
+# reference (``&#8203;``, the Dependabot convention) between the trigger and
+# the rest keeps the text readable but inert. Only ``@`` directly followed by
+# a name character, ``://`` and a word-initial ``www.`` are touched, so plain
+# prose ("@ 10 rps", "note: ...") renders unchanged.
+_ZWSP_REF = "&#8203;"
+_MENTION_RE = re.compile(r"@(?=[A-Za-z0-9])")
+_WWW_AUTOLINK_RE = re.compile(r"\b(www)\.", re.IGNORECASE)
+
+
+def _escape_residual_entry(entry) -> str:
+    """Neutralize markdown/HTML metacharacters in a residual-vector entry so it
+    renders as literal text inside the '## Residual Risk' bullet list.
+
+    Each entry is rendered as a single ``- {entry}`` bullet. A raw CR/LF would
+    let the entry break out of its bullet and inject top-level markdown blocks
+    (headings, horizontal rules, fake prose), so runs of CR/LF are collapsed to
+    a single space before the angle-bracket/backtick/bracket escaping (CANON-44,
+    CWE-116 line-break injection). ``@mentions`` and bare autolinks
+    (``https://``, ``www.``) are defused with a zero-width space so the
+    entry cannot ping users/teams or render a live link."""
+    s = html.escape(str(entry), quote=False)
+    for ch in _RESIDUAL_MD_ESCAPE_CHARS:
+        s = s.replace(ch, "\\" + ch)
+    s = _MENTION_RE.sub("@" + _ZWSP_REF, s)
+    s = s.replace("://", ":" + _ZWSP_REF + "//")
+    s = _WWW_AUTOLINK_RE.sub(r"\1" + _ZWSP_REF + ".", s)
+    # Collapse newlines so an entry cannot span multiple markdown lines.
+    s = re.sub(r"[\r\n]+", " ", s)
+    return s
 
 
 # REQ-HON-006 hand-wave regex source of truth.
@@ -92,6 +136,16 @@ class FullTierWithResidualsError(HonestyGuardError):
     """result-schema R-2: completeness_tier == FULL requires empty residual_vectors."""
 
 
+class UnknownTierError(HonestyGuardError):
+    """completeness_tier is not one of the result-schema enum values."""
+
+
+# result-schema.json ``completeness_tier`` enum. The tier is interpolated into
+# the PR/issue body as ``**{tier}**``, so anything outside this whitelist is
+# refused rather than rendered (PR #9 review, CWE-116).
+KNOWN_TIERS = ("FULL", *TIER_ONE_LINERS)
+
+
 def check_hand_wave(residual_vectors):
     """Raise HandWaveResidualError if any entry matches the hand-wave regex.
 
@@ -130,14 +184,21 @@ def render_residual_risk_section(vuln_id, tier, residual_vectors, issue_number=N
     Applies REQ-HON-006 / REQ-HON-007 / REQ-HON-009. Returns the rendered
     Markdown string. Raises HonestyGuardError subclasses on guard failure.
     Returns empty string when tier == FULL (no section rendered).
+    Raises ``UnknownTierError`` for a tier outside ``KNOWN_TIERS``.
     """
+    if tier not in KNOWN_TIERS:
+        raise UnknownTierError(
+            f"completeness_tier must be one of {KNOWN_TIERS}, got {tier!r}"
+        )
     check_tier_residual_consistency(tier, residual_vectors)
     if tier == "FULL":
         return ""
     check_hand_wave(residual_vectors)
 
-    bullets = "\n".join(f"- {entry}" for entry in residual_vectors)
-    one_liner = TIER_ONE_LINERS.get(tier, "not fully closed")
+    bullets = "\n".join(
+        f"- {_escape_residual_entry(entry)}" for entry in residual_vectors
+    )
+    one_liner = TIER_ONE_LINERS[tier]
     issue_ref = f" (see #{issue_number})" if issue_number else ""
     return (
         "## Residual Risk\n\n"
@@ -171,12 +232,37 @@ def pr_draft_state_for_tier(tier):
 # ---------- Verification table (Bundle 2b, REQ-GRA-011 / REQ-GRA-013 / REQ-GRA-014) ----------
 
 
+def _escape_table_cell(value) -> str:
+    """Neutralize a value so it renders as exactly one literal GFM table cell.
+
+    Verification-table cells carry scan-derived text — column 7 interpolates
+    ``file:symbol`` callers taken from the scanned repo. An unescaped ``|``
+    adds cells (enough to forge the Verdict column GitHub displays) and a raw
+    CR/LF ends the row and breaks out of the table (PR #9 review, CWE-116).
+
+    Applies the same html/backtick/bracket convention as
+    ``_escape_residual_entry``, then escapes ``|`` as ``\\|`` (GFM's in-cell
+    pipe escape) and collapses CR/LF runs to a single space. Parentheses,
+    colons, slashes and dots are untouched, so ``yes (src/a.py:42)``
+    citations render — and validate — byte-for-byte unchanged.
+    """
+    s = html.escape(str(value), quote=False)
+    for ch in _RESIDUAL_MD_ESCAPE_CHARS:
+        s = s.replace(ch, "\\" + ch)
+    s = s.replace("|", "\\|")
+    return re.sub(r"[\r\n]+", " ", s)
+
+
 def _column7_cell(graph_callers, routed_callers, sidecar_confidence):
     """Render the `All call sites covered?` cell with truncation policy.
 
     REQ-GRA-013: enumerate all callers ≤ 20; when > 20, list the first 20
     lexicographic + `... N more via callers_of()`. REQ-GRA-020: annotate
     with `(grep_fallback)` under confidence=low.
+
+    Callers are scan-derived and returned RAW here; ``render_verification_row``
+    table-cell escapes the whole cell (``_escape_table_cell``) before it is
+    interpolated into the markdown row.
     """
     routed = set(routed_callers or ())
     graph = list(graph_callers or ())
@@ -238,12 +324,22 @@ def render_verification_row(index, vuln_id, cells6, graph_callers=None,
     `cells6` is a 6-tuple (stated_closed, test_real, fail_closed,
     residual_doc, sweep_ok, verdict_placeholder). Column 7 (call sites)
     is computed from graph_callers + routed_callers.
+
+    Every cell — including the computed column 7 and Verdict — passes
+    through ``_escape_table_cell`` so no input can add, drop or split cells.
+    The Verdict is derived from the escaped cells, i.e. from exactly what
+    the rendered row (and ``scripts/validate-verification.py``) shows.
     """
     stated_closed, test_real, fail_closed, residual_doc, sweep_ok, _placeholder = cells6
     col7 = _column7_cell(graph_callers, routed_callers, sidecar_confidence)
-    data_cells = (stated_closed, test_real, fail_closed, residual_doc, col7, sweep_ok)
+    data_cells = tuple(
+        _escape_table_cell(c)
+        for c in (stated_closed, test_real, fail_closed, residual_doc, col7, sweep_ok)
+    )
     verdict = _derive_verdict(data_cells)
-    return "| " + " | ".join([str(index), vuln_id, *data_cells, verdict]) + " |"
+    cells = [_escape_table_cell(index), _escape_table_cell(vuln_id), *data_cells,
+             _escape_table_cell(verdict)]
+    return "| " + " | ".join(cells) + " |"
 
 
 def render_verification_table(rows):
