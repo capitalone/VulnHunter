@@ -1,0 +1,14 @@
+[
+    {
+        "finding_id": "JUICE-001",
+        "type": "SQLInjection",
+        "source_code": "https://github.com/juice-shop/juice-shop/tree/a520e158cb65c43d24e2c55d84f09b05a2511a03",
+        "description": "In routes/login.ts (login function, line 34), the email field from the POST request body is interpolated directly into a raw Sequelize SQL query: SELECT * FROM Users WHERE email = '${req.body.email}' AND password = '${hash}' AND deletedAt IS NULL. The email value is not parameterized or escaped. An attacker can supply the email value \"' OR 1=1--\" to bypass authentication and log in as the first user in the database (typically the admin account). The query is executed via models.sequelize.query() with no bind parameters, making it vulnerable to classic SQL injection."
+    },
+    {
+        "finding_id": "JUICE-002",
+        "type": "DOMXss",
+        "source_code": "https://github.com/juice-shop/juice-shop/tree/a520e158cb65c43d24e2c55d84f09b05a2511a03",
+        "description": "In frontend/src/app/search-result/search-result.component.ts (line 143), the URL query parameter 'q' is passed directly to Angular's DomSanitizer.bypassSecurityTrustHtml() and assigned to this.searchValue: this.searchValue = this.sanitizer.bypassSecurityTrustHtml(queryParam). The searchValue is then rendered as innerHTML in the component template. An attacker can craft a URL such as /#/search?q=<script>alert(1)</script> or use an img onerror payload. Because bypassSecurityTrustHtml explicitly disables Angular's built-in XSS sanitization, the injected markup is executed verbatim in the victim's browser when they visit the crafted search link."
+    }
+]

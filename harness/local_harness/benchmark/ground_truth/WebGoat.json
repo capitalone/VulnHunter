@@ -1,0 +1,14 @@
+[
+    {
+        "finding_id": "WEBGOAT-001",
+        "type": "PathTraversal",
+        "source_code": "https://github.com/WebGoat/WebGoat/tree/5142935bf7c279882c3b0fc0ecec42c447de6fd5",
+        "description": "In src/main/java/org/owasp/webgoat/lessons/pathtraversal/ProfileUploadBase.java (execute method, line 51), the fullName request parameter is passed unsanitized to new File(uploadDirectory, fullName). No canonicalization or path separator filtering is applied before the file is created. An attacker can supply a fullName value containing ../ sequences (e.g. '../../../etc/evil') to write the uploaded file content outside the intended per-user upload directory under /PathTraversal/{username}/. The file is written via FileCopyUtils.copy() before the attemptWasMade() check runs, meaning the traversed write succeeds even though the lesson then detects it. The vulnerable endpoint is POST /PathTraversal/profile-upload with a multipart fullName field."
+    },
+    {
+        "finding_id": "WEBGOAT-002",
+        "type": "PathTraversal",
+        "source_code": "https://github.com/WebGoat/WebGoat/tree/5142935bf7c279882c3b0fc0ecec42c447de6fd5",
+        "description": "In src/main/java/org/owasp/webgoat/lessons/pathtraversal/ProfileZipSlip.java, a ZIP archive uploaded via POST /PathTraversal/zip-slip is extracted using ZipFile without validating entry names. Each ZipEntry name is appended to the target directory via new File(tmpZipDirectory.toFile(), e.getName()) without checking for ../ sequences. A maliciously crafted ZIP with an entry named ../../webapps/ROOT/evil.jsp can write files outside the extraction directory to arbitrary locations writable by the application server process. This is the Zip Slip variant of path traversal (CVE-2018-1002200 pattern)."
+    }
+]
