@@ -14,6 +14,7 @@ from agent.audit import (
     AuditWriteError,
     AuditWriter,
     ULIDGenerator,
+    _clean,
     build_clean_scan_notified,
     build_finding_event,
     build_finding_opened,
@@ -150,6 +151,107 @@ class TestAuditWriter:
         line = (tmp_path / "audit.jsonl").read_text()
         assert "secret-token" not in line
         assert "***" in line
+
+    def test_sensitive_key_values_masked(self, tmp_path: Path) -> None:
+        # Bare secret values carry no token shape for redact() to match, so
+        # they must be masked by key name — at any depth, including in lists.
+        w = _writer(tmp_path)
+        w.emit_audit(
+            {
+                "event_id": "x",
+                "client_secret": "SECRET-A",
+                "config": {
+                    "clientSecret": "SECRET-B",
+                    "scan_token": "SECRET-C",
+                    "anthropic-api-key": "SECRET-D",
+                    "Authorization": "SECRET-E",
+                },
+                # Every remaining name/suffix in the rule; api_key, private_key,
+                # secret_key and set-cookie only match once "_"/"-" are stripped.
+                "api_key": "SECRET-I",
+                "private_key": "SECRET-J",
+                "secret_key": "SECRET-K",
+                "set-cookie": "SECRET-L",
+                "db_passwd": "SECRET-M",
+                "Cookie": "SECRET-N",
+                "attempts": [{"password": "SECRET-F"}, {"refresh_token": "SECRET-G"}],
+            }
+        )
+        w.close()
+        obj = json.loads((tmp_path / "audit.jsonl").read_text())
+        assert "SECRET-" not in json.dumps(obj)
+        assert obj["client_secret"] == "***"
+        assert obj["config"]["Authorization"] == "***"
+        assert obj["attempts"][0]["password"] == "***"
+
+    def test_non_sensitive_token_and_key_fields_preserved(self, tmp_path: Path) -> None:
+        # Suffix/exact matching only: usage counters, endpoints, modes and
+        # identifier keys that merely contain "token"/"key"/"auth" survive.
+        fields = {
+            "input_tokens": 1200,
+            "cache_read_input_tokens": 7,
+            "token_endpoint": "https://oauth.example.com/token",
+            "token_budget_fraction": "0.5",
+            "broker_token_dir": "/var/run/broker",
+            "auth_mode": "bedrock_oauth",
+            "vulnfix_key": "abcdef0123456789",
+            "client_id": "cid",
+        }
+        w = _writer(tmp_path)
+        w.emit_audit({"event_id": "x", **fields})
+        w.close()
+        obj = json.loads((tmp_path / "audit.jsonl").read_text())
+        for k, v in fields.items():
+            assert obj[k] == v, k
+
+    def test_sensitive_key_non_string_values(self, tmp_path: Path) -> None:
+        # Under a sensitive key: dicts are walked (their own keys decide),
+        # list/tuple elements and bytes are masked, empty values and other
+        # scalars pass through so an unset secret still reads as unset.
+        w = _writer(tmp_path)
+        w.emit_audit(
+            {
+                "event_id": "x",
+                "token": {"access_token": "SECRET-H", "expires_in": 3600},
+                "Set-Cookie": ["sid=SECRET-O; Path=/", "csrf=SECRET-P"],
+                "api_keys": ("SECRET-Q", {"note": "kept", "password": "SECRET-R"}),
+                "password": b"SECRET-S",
+                "client_secret": "",
+                "max_token": 5,
+            }
+        )
+        w.close()
+        obj = json.loads((tmp_path / "audit.jsonl").read_text())
+        assert "SECRET-" not in json.dumps(obj)
+        assert obj["token"] == {"access_token": "***", "expires_in": 3600}
+        assert obj["Set-Cookie"] == ["***", "***"]
+        assert obj["api_keys"] == ["***", {"note": "kept", "password": "***"}]
+        assert obj["password"] == "***"
+        assert obj["client_secret"] == ""
+        assert obj["max_token"] == 5
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "credentials",
+            "client_credential",
+            "aws_secret_access_key",
+            "secret_access_key",
+            "access_key",
+            "private_key_pem",
+            "proxy-authorization",
+            "ssh_passphrase",
+            "secrets",
+            "passwords",
+            "api_keys",
+        ],
+    )
+    def test_extended_sensitive_key_shapes_masked(self, key: str) -> None:
+        assert _clean({key: "SECRET-T"}) == {key: "***"}
+
+    def test_non_string_key_not_treated_as_sensitive(self) -> None:
+        # Non-str keys can't name a credential; they must not crash the check.
+        assert _clean({1: "plain"}) == {1: "plain"}
 
     def test_stdout_mirror(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
