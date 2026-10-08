@@ -28,13 +28,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from local_harness.config import BENCHMARK_DIR, MODEL, REPO_ROOT, RESULTS_DIR, STATE_FILE, atomic_write_json
 
+# REPO_ROOT is the harness/ directory; the scanner's phase prompts live in the
+# vulnhunt skill at the top of the repository.
+PROJECT_ROOT = os.path.dirname(REPO_ROOT)
+PROMPTS_DIR = os.path.join(PROJECT_ROOT, "vulnhunt", "phases")
+
+# Prompt files per loss phase, relative to PROJECT_ROOT.
 PHASE_TO_PROMPT = {
-    "phase1": ["skill/phases/phase1_recon.md"],
-    "phase2_inj": ["skill/phases/phase2_shared.md", "skill/phases/phase2_class_inj.md"],
-    "phase2_nav": ["skill/phases/phase2_shared.md", "skill/phases/phase2_class_nav.md"],
-    "phase2_log": ["skill/phases/phase2_shared.md", "skill/phases/phase2_class_log.md"],
-    "phase2b": ["skill/phases/phase2b_verify.md"],
-    "unknown": ["skill/phases/phase2_hunt.md"],
+    "phase1": ["vulnhunt/phases/phase1_recon.md"],
+    "phase2_inj": ["vulnhunt/phases/phase2_shared.md", "vulnhunt/phases/phase2_class_inj.md"],
+    "phase2_nav": ["vulnhunt/phases/phase2_shared.md", "vulnhunt/phases/phase2_class_nav.md"],
+    "phase2_log": ["vulnhunt/phases/phase2_shared.md", "vulnhunt/phases/phase2_class_log.md"],
+    "phase2b": ["vulnhunt/phases/phase2b_verify.md"],
+    "unknown": ["vulnhunt/phases/phase2_hunt.md"],
 }
 
 ANALYSIS_JSON = os.path.join(RESULTS_DIR, "miss_analysis.json")
@@ -46,7 +52,7 @@ INVESTIGATION PROCESS:
 1. Start with the ground truth vulnerability definition to understand exactly what should have been found
 2. Read the scanner results in the VULNHUNT_RESULTS directory to see what WAS found and what wasn't
 3. Dive into the scan log (benchmark_scan.log - JSONL format, one JSON object per line) to trace where the scanner's reasoning went wrong. Use grep to find relevant sections rather than reading the whole file.
-4. Read the relevant prompt file(s) in skill/phases/ to identify what instruction gap led to the miss
+4. Read the relevant prompt file(s) in vulnhunt/phases/ to identify what instruction gap led to the miss
 
 DIAGNOSIS CONSTRAINTS:
 - Identify the ROOT CAUSE in the scanner's prompts/instructions
@@ -59,7 +65,7 @@ DIAGNOSIS CONSTRAINTS:
 Output ONLY valid JSON:
 {
   "root_cause": "Why the scanner missed this — be specific about which instruction/rule/gate caused the miss",
-  "prompt_file": "The primary prompt file to change (relative path like skill/phases/phase2_shared.md)",
+  "prompt_file": "The primary prompt file to change (relative path like vulnhunt/phases/phase2_shared.md)",
   "section_to_change": "Quote the relevant section heading or existing text",
   "suggested_change": "The specific text to add, modify, or delete — as short and general as possible",
   "change_type": "add|edit|delete",
@@ -227,7 +233,7 @@ def build_diagnostic_prompt(finding, phase_key, evidence, results_dir, repo_dir)
     gt_files = glob.glob(os.path.join(BENCHMARK_DIR, f"{finding['repo_name']}*.json"))
     gt_path = gt_files[0] if gt_files else "unknown"
     prompt_files = PHASE_TO_PROMPT.get(phase_key, PHASE_TO_PROMPT["unknown"])
-    prompt_paths = [os.path.join(REPO_ROOT, p) for p in prompt_files]
+    prompt_paths = [os.path.join(PROJECT_ROOT, p) for p in prompt_files]
     scan_log_path = os.path.join(repo_dir, "benchmark_scan.log")
 
     return f"""Finding {finding['finding_id']} was NOT detected. Figure out where the scanner went amiss.
@@ -242,7 +248,7 @@ def build_diagnostic_prompt(finding, phase_key, evidence, results_dir, repo_dir)
 - Scanner results directory: {results_dir}/
 - Scan log (JSONL, use grep): {scan_log_path}
 - Relevant prompt file(s): {', '.join(prompt_paths)}
-- All prompt files: {os.path.join(REPO_ROOT, 'skill', 'phases')}/
+- All prompt files: {PROMPTS_DIR}/
 
 ## Pre-analysis Hint (may be wrong — verify)
 Lost at **{phase_key}** phase. Evidence: {evidence[:500]}
@@ -275,7 +281,7 @@ def invoke_diagnostic(finding, phase_key, evidence, results_dir, repo_dir):
         "--strict-mcp-config",
         "--add-dir", repo_dir,
         "--add-dir", results_dir,
-        "--add-dir", os.path.join(REPO_ROOT, "skill", "phases"),
+        "--add-dir", PROMPTS_DIR,
         "--add-dir", BENCHMARK_DIR,
     ]
 
