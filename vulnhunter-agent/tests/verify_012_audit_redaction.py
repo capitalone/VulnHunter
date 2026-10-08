@@ -5,8 +5,6 @@ audit content, but only rewrites basic-auth URLs. It must also redact bearer
 headers, access_token query params, and raw token prefixes.
 """
 
-import pytest
-
 from agent._url import redact
 
 
@@ -16,14 +14,16 @@ def test_basic_auth_still_redacted():
     )
 
 
+# The bearer and query-param cases use opaque tokens with no known prefix, so
+# the raw-prefix pass can't mask them and each test exercises only its own pass.
 def test_bearer_header_redacted():
-    out = redact("Authorization: Bearer ghp_AAAA1111BBBB2222CCCC3333")
+    out = redact("Authorization: Bearer AAAA1111BBBB2222CCCC3333")
     assert "AAAA1111BBBB2222" not in out
     assert "***" in out
 
 
 def test_access_token_query_redacted():
-    out = redact("https://api.github.com/x?access_token=ghp_SECRET1234ABCD&y=1")
+    out = redact("https://api.github.com/x?access_token=SECRET1234ABCD&y=1")
     assert "SECRET1234ABCD" not in out
     assert "y=1" in out  # non-secret query params preserved
 
