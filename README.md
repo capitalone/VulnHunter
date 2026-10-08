@@ -60,6 +60,7 @@ Each component is organized into a self-contained subtree:
 | `vulnhunt-fix-verify/` | The `/vulnhunt-fix-verify` standalone verification skill (Prompt-only). See [`vulnhunt-fix-verify/README.md`](vulnhunt-fix-verify/README.md). |
 | `vulnhunter-agent/` | Config-driven headless runtime wrapper that runs scans and files GitHub issues. See [`vulnhunter-agent/README.md`](vulnhunter-agent/README.md). |
 | `harness/` | Developer tooling for running large batch-scans and benchmarking detection accuracy. See [`harness/README.md`](harness/README.md). |
+| `vulnhunt-copilot/` | A port of all three skills to VS Code Copilot Agent Skills, for interactive use in VS Code. Not self-contained by design — it overlays install-time additions onto the `vulnhunt/`, `vulnhunter-fix/`, and `vulnhunt-fix-verify/` directories above rather than duplicating them. See [`vulnhunt-copilot/README.md`](vulnhunt-copilot/README.md). |
 
 ---
 
