@@ -74,6 +74,7 @@ def _patch_main_dependencies(
     download_error: Exception | None = None,
     issues_summary: Any = None,
     issues_error: Exception | None = None,
+    extract_error: Exception | None = None,
 ) -> dict[str, Any]:
     """Patch every external collaborator main() reaches."""
     calls: dict[str, Any] = {
@@ -81,6 +82,7 @@ def _patch_main_dependencies(
         "shallow": 0,
         "run": 0,
         "download": 0,
+        "extract": 0,
         "post_issues": 0,
     }
 
@@ -113,6 +115,14 @@ def _patch_main_dependencies(
         assert download_result is not None
         return download_result
 
+    async def fake_extract_findings(results_dir: Path, *a: object, **k: object) -> Any:
+        calls["extract"] += 1
+        if extract_error is not None:
+            raise extract_error
+        from agent.issues_extract import ExtractedReport
+
+        return ExtractedReport(findings=[], scan_date="", results_dir_name=results_dir.name)
+
     def fake_post_issues(*a: object, **k: object) -> Any:
         calls["post_issues"] += 1
         if issues_error is not None:
@@ -136,6 +146,7 @@ def _patch_main_dependencies(
     monkeypatch.setattr(main_mod, "run_vulnhunt", fake_run_vulnhunt)
     monkeypatch.setattr(main_mod, "publish_results", fake_publish_results)
     monkeypatch.setattr(main_mod, "download_latest_report", fake_download)
+    monkeypatch.setattr(main_mod.issues_extract, "extract_findings", fake_extract_findings)
     monkeypatch.setattr(main_mod.issues_stage, "post_issues", fake_post_issues_async)
     monkeypatch.setattr(main_mod, "make_token_manager", lambda *a, **k: _FakeOAuth())
     # Standalone preflight makes a real HTTP call to GitHub; stub it out
@@ -963,6 +974,65 @@ def test_main_issues_stage_exception_returns_4(
     captured = capsys.readouterr().out
     assert rc == 4
     assert "Issues:   FAILED" in captured
+
+
+def test_main_extraction_failure_skips_issues_stage_returns_4(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    populated_agent_config: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg = _full_pipeline_config(populated_agent_config)
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    results = clone / "x_VULNHUNT_RESULTS_opus47_2026-06-23-141824"
+    results.mkdir()
+    monkeypatch.setattr(main_mod, "_short_sha", lambda d: "abc1234")
+    calls = _patch_main_dependencies(
+        monkeypatch,
+        config=cfg,
+        clone_dir=clone,
+        results_dir=results,
+        publish_sha="abcdef12",
+        extract_error=FileNotFoundError(f"README.md not found in {results}"),
+    )
+    rc = main(["--mode=scan", "https://github.com/o/r"])
+    captured = capsys.readouterr().out
+    assert rc == 4
+    # post_issues() would rerun the extraction that just failed.
+    assert calls["extract"] == 1
+    assert calls["post_issues"] == 0
+    assert "Issues:   FAILED (finding extraction failed: README.md not found" in captured
+
+
+def test_main_no_scan_extraction_failure_skips_issues_stage_returns_4(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    populated_agent_config: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg = _full_pipeline_config(populated_agent_config)
+    workdir = tmp_path / "fake_workdir"
+    workdir.mkdir()
+    downloaded = workdir / "downloaded_VULNHUNT_RESULTS_opus47_2026-06-23-141824"
+    downloaded.mkdir()
+    rel_path = "o/r/abc1234/downloaded_VULNHUNT_RESULTS_opus47_2026-06-23-141824"
+    calls = _patch_main_dependencies(
+        monkeypatch,
+        config=cfg,
+        clone_dir=tmp_path,
+        results_dir=None,
+        download_result=DownloadedReport(
+            path=downloaded, rel_path_in_dest=rel_path, workdir=workdir
+        ),
+        extract_error=RuntimeError("extractor returned malformed JSON"),
+    )
+    rc = main(["--mode=scan", "https://github.com/o/r", "--no-scan"])
+    captured = capsys.readouterr().out
+    assert rc == 4
+    assert calls["extract"] == 1
+    assert calls["post_issues"] == 0
+    assert "Issues:   FAILED (finding extraction failed: extractor returned malformed JSON)" in captured
 
 
 def test_main_no_scan_issues_downloads_and_posts(
