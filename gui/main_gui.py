@@ -1,5 +1,11 @@
 import sys
 from datetime import datetime
+from pathlib import Path
+
+# main_gui.py is in VulnHunter/gui/, so the repo root is one level up
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -10,11 +16,13 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from mock_data import (
-    DISABLED_MODELS, MODEL_IDS, REPO_URL, SAMPLE_FINDINGS, SAMPLE_OUTPUT, SCAN_DURATION, SCAN_TOKENS, SEED_HISTORY,
-    SEVERITY_ORDER, ScanRecord,
+from gui.data.mock_data import (
+    DISABLED_MODELS, MODEL_IDS, REPO_URL, SAMPLE_FINDINGS, SAMPLE_OUTPUT,
+    SCAN_DURATION, SCAN_TOKENS, SEED_HISTORY, SEVERITY_ORDER, ScanRecord,
 )
+from llm_connector.conn_all_llm import LLMConnector
 
+from gui.api_conn_page import ApiConnectorPage
 
 STYLE = """
 QWidget { color: #E6EEF8; font-size: 14px; }
@@ -265,11 +273,32 @@ class ScanPage(QWidget):
         self.demo.setEnabled(editable)
         self.scan_btn.setEnabled(editable)
 
-    # Scan (demo replay only)
+    # Scan with LLM Connector:
     def start_scan(self):
+        selected_model = self.model_box.currentText()
+        repo_target = self.repo.text().strip() or REPO_URL
+
+        # If Demo mode is unchecked, trigger the live LLMConnector route!
         if not self.demo.isChecked():
-            self.output.setPlainText("Live scan is not implemented yet.")
+            self.output.clear()
+            self.output.appendPlainText(f"Connecting to {selected_model} for live scan on: {repo_target}...\n")
+            
+            try:
+                # 1. Initialize your unified connector with the dropdown selection
+                connector = LLMConnector(selected_model)
+                
+                # 2. Construct your prompt/query for the vulnerability scan
+                prompt = f"Perform a security vulnerability analysis on the codebase at: {repo_target}"
+                
+                # 3. Generate response and display it in the output text box
+                response = connector.generate_response(prompt)
+                self.output.appendPlainText(response)
+                
+            except Exception as e:
+                self.output.appendPlainText(f"Error connecting to model: {str(e)}")
             return
+
+        # Otherwise, run your existing simulated demo replay workflow
         self._fill_table([])
         self.output.clear()
         self.scan_btn.setEnabled(False)

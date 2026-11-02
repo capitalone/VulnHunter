@@ -10,8 +10,8 @@ On Windows, no extra setup is needed. No live scan, network, or Claude account i
 import pytest
 from PyQt5.QtWidgets import QApplication
 
-from app import ScanPage, SeverityTracker
-from mock_data import SEVERITY_ORDER, Finding
+from main_gui import ScanPage, SeverityTracker
+from gui.data.mock_data import SEVERITY_ORDER, Finding
 
 
 @pytest.fixture(scope="module")
