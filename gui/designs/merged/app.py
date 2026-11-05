@@ -17,7 +17,7 @@ from mock_data import (
 
 
 STYLE = """
-QWidget { color: #E6EEF8; font-size: 14px; }
+QWidget { color: #E6EEF8; font-size: 24px; }
 QMainWindow, QWidget#root { background: #0A1424; }
 QDialog, QMessageBox { background: #111E33; }
 QFrame#header { background: #0F2747; border: 0; border-bottom: 1px solid #1F4E8C; }
@@ -143,8 +143,6 @@ class HomePage(QWidget):
         layout.addStretch()
 
 
-
-
 class StatsPage(QWidget):
     def __init__(self):
         super().__init__()
@@ -156,8 +154,6 @@ class StatsPage(QWidget):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.addWidget(title)
         layout.addStretch()
-
-
 
 class HistoryPage(QWidget):
     new_scan = pyqtSignal()
