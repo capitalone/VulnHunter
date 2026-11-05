@@ -12,6 +12,7 @@ import os
 
 import pytest
 
+import local_harness.benchmark.run as run
 from local_harness.benchmark.run import _validate_benchmarks
 
 GROUND_TRUTH_DIR = os.path.join(
@@ -91,3 +92,56 @@ def test_validate_benchmarks_rejects_bad_source_url():
     }])]
     errors = _validate_benchmarks(benchmarks)
     assert any("source_code" in e for e in errors)
+
+
+def _finding(**overrides):
+    base = {
+        "finding_id": "X-001",
+        "type": "SQLi",
+        "description": "test",
+        "source_code": "https://github.com/org/repo/tree/abc123",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_validate_benchmarks_rejects_non_string_source_code():
+    """A null (or other non-string) source_code must not reach url.startswith()."""
+    benchmarks = [("bad.json", [_finding(source_code=None)])]
+    errors = _validate_benchmarks(benchmarks)
+    assert any("source_code must be a string" in e for e in errors)
+
+
+def test_validate_benchmarks_rejects_non_string_finding_id():
+    """A non-hashable finding_id (e.g. a list) must not reach `fid in seen_ids`."""
+    benchmarks = [("bad.json", [_finding(finding_id=["X"])])]
+    errors = _validate_benchmarks(benchmarks)
+    assert any("finding_id must be a string" in e for e in errors)
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "https://github.com/org/repo/tree/",  # empty hash -> parses to hash "tree"
+        "https://github.com/tree/x",  # no org/repo -> parses to repo "x"
+        "https://github.com/o/r/tree/abc/sub/file.py",  # trailing path -> hash "file.py"
+    ],
+    ids=["empty-hash", "repo-named-tree", "trailing-path-segments"],
+)
+def test_validate_benchmarks_rejects_source_url_shapes_that_misparse(bad_url):
+    """Each of these passes the old substring check but mis-parses in parse_source_url()."""
+    benchmarks = [("bad.json", [_finding(source_code=bad_url)])]
+    errors = _validate_benchmarks(benchmarks)
+    assert any("source_code" in e for e in errors), f"expected rejection for {bad_url!r}"
+
+
+def test_load_all_benchmarks_reports_invalid_json(monkeypatch, tmp_path):
+    """A corpus file with malformed JSON must go through the validation-error path,
+    not raise a raw json.JSONDecodeError traceback."""
+    bdir = tmp_path / "gt"
+    bdir.mkdir()
+    (bdir / "broken.json").write_text("[{,}]")
+    monkeypatch.setattr(run, "BENCHMARK_DIR", str(bdir))
+
+    with pytest.raises(SystemExit):
+        run.load_all_benchmarks()

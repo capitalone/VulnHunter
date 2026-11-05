@@ -18,7 +18,7 @@ The harness operates in four phases:
 
 ## Ground Truth Data
 
-The `ground_truth/` directory contains JSON files (one per repo) with known findings across unique (repo, commit) combinations. This repo ships a small **synthetic** example corpus (`ground_truth/EXAMPLE.json`) pointing at public, deliberately-vulnerable apps; supply your own corpus of real findings locally. See `ground_truth/README.md` for the schema. Each finding records:
+The `ground_truth/` directory contains JSON files (one per repo) with known findings across unique (repo, commit) combinations. This repo ships a real starter corpus (`ground_truth/{NodeGoat,juice-shop,WebGoat}.json`) pinned to specific commits of public, deliberately-vulnerable apps; supply your own corpus of real findings locally. See `ground_truth/README.md` for the schema. Each finding records:
 
 ```json
 {

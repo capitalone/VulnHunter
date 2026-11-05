@@ -63,9 +63,14 @@ dependencies and run exploit tests. Use it only on code you trust.
 
 Ground truth lives in `local_harness/benchmark/ground_truth/*.json` — one file
 per repo, each finding pinned to a public GitHub URL at a specific commit. The
-repo ships only a synthetic `EXAMPLE.json` mapped to public targets (OWASP Juice
-Shop / WebGoat / NodeGoat); **bring your own corpus** by adding
+repo ships a real starter corpus pinned to specific commits of OWASP Juice
+Shop, WebGoat, and NodeGoat; **bring your own corpus** by adding
 `ground_truth/<repo>.json`.
+
+**Upgrading from a version that predates the starter corpus?** `load_all_benchmarks()`
+globs every `*.json` in `ground_truth/`, so a run now also clones and judges the
+three starter-corpus repos alongside whatever you already had there — more
+wall-clock time and model cost per run, with `--repos` as the only filter.
 
 ```bash
 python -m local_harness.benchmark.run                  # full run: clone + scan + judge + tally
