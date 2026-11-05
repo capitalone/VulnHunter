@@ -17,7 +17,7 @@ from mock_data import (
 
 
 STYLE = """
-QWidget { color: #E6EEF8; font-size: 14px; }
+QWidget { color: #E6EEF8; font-size: 24px; }
 QMainWindow, QWidget#root { background: #0A1424; }
 QDialog, QMessageBox { background: #111E33; }
 QFrame#header { background: #0F2747; border: 0; border-bottom: 1px solid #1F4E8C; }
@@ -103,6 +103,57 @@ class SeverityTracker(QFrame):
         for name, label in self.counts.items():
             label.setText(str(sum(f.severity == name for f in findings)))
 
+
+class HomePage(QWidget):
+    dashboard_requested = pyqtSignal()
+    stats_requested = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+
+        title = QLabel("VulnHunter")
+        title.setFont(QFont("Segoe UI", 32, QFont.DemiBold))
+        title.setAlignment(Qt.AlignCenter)
+
+        subtitle = QLabel("Welcome to VulnGUI.")
+        subtitle.setAlignment(Qt.AlignCenter)
+
+        open_btn = QPushButton("Dashboard")
+        open_btn.setObjectName("primary")
+        open_btn.clicked.connect(self.dashboard_requested.emit)
+
+        open_btn_2 = QPushButton("Stats")
+        open_btn_2.setObjectName("primary")
+        open_btn_2.clicked.connect(self.stats_requested.emit)
+
+
+        button_row = QHBoxLayout()
+        button_row.addStretch()
+        button_row.addWidget(open_btn)
+        button_row.addWidget(open_btn_2)
+        button_row.addStretch()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.addStretch()
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addSpacing(24)
+        layout.addLayout(button_row)
+        layout.addStretch()
+
+
+class StatsPage(QWidget):
+    def __init__(self):
+        super().__init__()
+        title = QLabel("Vulnerabilities Burndown")
+        title.setFont(QFont("Segoe UI", 32, QFont.DemiBold))
+        title.setAlignment(Qt.AlignCenter)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.addWidget(title)
+        layout.addStretch()
 
 class HistoryPage(QWidget):
     new_scan = pyqtSignal()
@@ -322,7 +373,7 @@ class ScanPage(QWidget):
 
 
 class MainWindow(QMainWindow):
-    HISTORY, SCAN = 0, 1
+    HOME, HISTORY, SCAN, STATS = 0, 1, 2, 3
 
     def __init__(self):
         super().__init__()
@@ -330,11 +381,16 @@ class MainWindow(QMainWindow):
         self.resize(1180, 620)
         self.history = list(SEED_HISTORY)  # newest first; held in memory only
 
+        self.home_page = HomePage()
         self.history_page = HistoryPage()
         self.scan_page = ScanPage(SAMPLE_FINDINGS, SAMPLE_OUTPUT)
+        self.stats_page = StatsPage()
         self.stack = QStackedWidget()
+        self.stack.addWidget(self.home_page)
         self.stack.addWidget(self.history_page)
         self.stack.addWidget(self.scan_page)
+        self.stack.addWidget(self.stats_page)
+        self.home_page.stats_requested.connect(self.show_stats)
 
         # Shared header: one home button, centered, visible on every page
         header = QFrame()
@@ -343,7 +399,7 @@ class MainWindow(QMainWindow):
         home = QPushButton("VulnHunter")
         home.setObjectName("home")
         home.setCursor(Qt.PointingHandCursor)
-        home.clicked.connect(self.show_history)
+        home.clicked.connect(self.show_home)
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(24, 0, 24, 0)
         header_layout.addStretch()
@@ -359,10 +415,17 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.stack, 1)
         self.setCentralWidget(root)
 
+        self.home_page.dashboard_requested.connect(self.show_history)
         self.history_page.new_scan.connect(self.new_scan)
         self.history_page.record_selected.connect(self.open_record)
         self.scan_page.finished.connect(self.add_record)
         self.history_page.refresh(self.history)
+
+    def show_home(self):
+        self.stack.setCurrentIndex(self.HOME)
+
+    def show_stats(self):
+        self.stack.setCurrentIndex(self.STATS)
 
     def show_history(self):
         self.stack.setCurrentIndex(self.HISTORY)
@@ -370,6 +433,9 @@ class MainWindow(QMainWindow):
     def new_scan(self):
         self.scan_page.reset()
         self.stack.setCurrentIndex(self.SCAN)
+
+    def show_stats(self):
+        self.stack.setCurrentIndex(self.STATS)
 
     def open_record(self, row):
         self.scan_page.show_record(self.history[row])
