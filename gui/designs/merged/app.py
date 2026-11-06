@@ -17,7 +17,7 @@ from mock_data import (
 
 
 STYLE = """
-QWidget { color: #E6EEF8; font-size: 14px; }
+QWidget { color: #E6EEF8; font-size: 18px; }
 QMainWindow, QWidget#root { background: #0A1424; }
 QDialog, QMessageBox { background: #111E33; }
 QFrame#header { background: #0F2747; border: 0; border-bottom: 1px solid #1F4E8C; }
@@ -57,6 +57,17 @@ QScrollBar:horizontal { background: #111E33; height: 12px; margin: 0; }
 QScrollBar::handle:horizontal { background: #243B5C; border-radius: 5px; min-width: 24px; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 """
+
+
+MIN_WINDOW_SIZE = (1300, 700)
+PREFERRED_WINDOW_SIZE = (1360, 820)
+
+
+def default_window_size(screen_width, screen_height):
+    """Preferred size, shrunk to fit the available screen but never below the minimum."""
+    width = min(PREFERRED_WINDOW_SIZE[0], int(screen_width * 0.95))
+    height = min(PREFERRED_WINDOW_SIZE[1], int(screen_height * 0.92))
+    return max(width, MIN_WINDOW_SIZE[0]), max(height, MIN_WINDOW_SIZE[1])
 
 
 def make_table(headers):
@@ -189,12 +200,12 @@ class HistoryPage(QWidget):
         self.table = make_table(
             ["Repository", "Model", "Mode", "Date", "Findings", "Tokens", "Duration"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.setColumnWidth(1, 150)
-        self.table.setColumnWidth(2, 90)
-        self.table.setColumnWidth(3, 130)
-        self.table.setColumnWidth(4, 90)
-        self.table.setColumnWidth(5, 80)
-        self.table.setColumnWidth(6, 90)
+        self.table.setColumnWidth(1, 160)
+        self.table.setColumnWidth(2, 100)
+        self.table.setColumnWidth(3, 150)
+        self.table.setColumnWidth(4, 115)
+        self.table.setColumnWidth(5, 100)
+        self.table.setColumnWidth(6, 115)
         self.table.cellClicked.connect(lambda row, _col: self.record_selected.emit(row))
 
         layout = QVBoxLayout(self)
@@ -256,10 +267,10 @@ class ScanPage(QWidget):
         # Findings table
         self.table = make_table(["ID", "Severity", "Finding", "Location", "Status"])
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table.setColumnWidth(0, 110)
-        self.table.setColumnWidth(1, 100)
-        self.table.setColumnWidth(3, 240)
-        self.table.setColumnWidth(4, 120)
+        self.table.setColumnWidth(0, 115)
+        self.table.setColumnWidth(1, 105)
+        self.table.setColumnWidth(3, 290)
+        self.table.setColumnWidth(4, 125)
         self.table.itemSelectionChanged.connect(self._update_buttons)
         self.tracker = SeverityTracker()
         body = QHBoxLayout()
@@ -387,8 +398,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("VulnHunter")
-        self.setMinimumSize(1000, 560)
-        self.resize(1200, 720)
+        self.setMinimumSize(*MIN_WINDOW_SIZE)
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.resize(*default_window_size(screen.width(), screen.height()))
         self.history = list(SEED_HISTORY)  # newest first; held in memory only
 
         self.home_page = HomePage()

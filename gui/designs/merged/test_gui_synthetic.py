@@ -201,15 +201,27 @@ def test_home_navigation(qapp):
     assert window.stack.currentIndex() == window.HOME
 
 
-def test_window_default_and_minimum_size(qapp):
+def test_default_window_size_fits_screen_but_not_below_minimum():
+    min_w, min_h = gui.MIN_WINDOW_SIZE
+    pref_w, pref_h = gui.PREFERRED_WINDOW_SIZE
+    # Large screen: the preferred size.
+    assert gui.default_window_size(2560, 1440) == (pref_w, pref_h)
+    # Small screen: shrinks to fit, but never below the minimum.
+    width, height = gui.default_window_size(1366, 768)
+    assert min_w <= width <= pref_w and min_h <= height <= pref_h
+    assert gui.default_window_size(800, 600) == (min_w, min_h)
+
+
+def test_main_window_uses_minimum_size(qapp):
     window = MainWindow()
-    assert (window.width(), window.height()) == (1200, 720)
-    assert (window.minimumWidth(), window.minimumHeight()) == (1000, 560)
+    assert (window.minimumWidth(), window.minimumHeight()) == gui.MIN_WINDOW_SIZE
+    assert window.width() >= gui.MIN_WINDOW_SIZE[0]
+    assert window.height() >= gui.MIN_WINDOW_SIZE[1]
 
 
-def test_base_font_size_is_compact():
-    # Dense layout for a developer tool; guards against the 24px regression.
-    assert "font-size: 14px" in gui.STYLE.splitlines()[1]
+def test_base_font_size_is_larger_than_original():
+    # Stakeholder asked for larger text than the original 14px.
+    assert "font-size: 18px" in gui.STYLE.splitlines()[1]
 
 
 def test_main_window_defines_show_stats_once():
