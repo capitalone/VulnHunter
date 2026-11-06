@@ -17,7 +17,7 @@ from mock_data import (
 
 
 STYLE = """
-QWidget { color: #E6EEF8; font-size: 24px; }
+QWidget { color: #E6EEF8; font-size: 14px; }
 QMainWindow, QWidget#root { background: #0A1424; }
 QDialog, QMessageBox { background: #111E33; }
 QFrame#header { background: #0F2747; border: 0; border-bottom: 1px solid #1F4E8C; }
@@ -387,7 +387,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("VulnHunter")
-        self.resize(1180, 620)
+        self.setMinimumSize(1000, 560)
+        self.resize(1200, 720)
         self.history = list(SEED_HISTORY)  # newest first; held in memory only
 
         self.home_page = HomePage()

@@ -201,6 +201,17 @@ def test_home_navigation(qapp):
     assert window.stack.currentIndex() == window.HOME
 
 
+def test_window_default_and_minimum_size(qapp):
+    window = MainWindow()
+    assert (window.width(), window.height()) == (1200, 720)
+    assert (window.minimumWidth(), window.minimumHeight()) == (1000, 560)
+
+
+def test_base_font_size_is_compact():
+    # Dense layout for a developer tool; guards against the 24px regression.
+    assert "font-size: 14px" in gui.STYLE.splitlines()[1]
+
+
 def test_main_window_defines_show_stats_once():
     # Guards against the duplicate definition that was removed.
     import inspect
