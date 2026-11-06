@@ -106,11 +106,11 @@ def test_fill_table_sorts_by_severity_and_tracker_matches_table(qapp):
     assert tracker_counts(page.tracker) == {name: "0" for name in SEVERITY_ORDER}
 
 
-@pytest.mark.xfail(reason="Known edge case: unknown severity has no tier, "
-                          "so _fill_table raises ValueError instead of "
-                          "handling it. Fix by giving unknown severities a "
-                          "fallback rank in the sort key.")
-def test_unknown_severity_does_not_crash_fill_table(qapp):
+def test_unknown_severity_sorts_last_and_does_not_crash(qapp):
     page = ScanPage([], [])
-    page._fill_table([make_finding("VULN-9", "Critical")])
-    assert page.table.rowCount() == 1
+    page._fill_table([make_finding("VULN-9", "Critical"), make_finding("VULN-1", "Low")])
+    assert page.table.rowCount() == 2
+    # The unknown tier sorts after every known tier and is not counted by the tracker.
+    assert page.table.item(0, 1).text() == "Low"
+    assert page.table.item(1, 1).text() == "Critical"
+    assert sum(int(t) for t in tracker_counts(page.tracker).values()) == 1

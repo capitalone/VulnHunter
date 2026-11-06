@@ -233,12 +233,16 @@ class ScanPage(QWidget):
         self.repo = QLineEdit()
         self.repo.setPlaceholderText("GitHub URL or local path")
         self.model_box = QComboBox()
-        self.model_box.addItems(list(MODEL_IDS) + DISABLED_MODELS)
+        self.model_box.addItems(list(MODEL_IDS) + [f"{m} (not available yet)" for m in DISABLED_MODELS])
         for i in range(len(MODEL_IDS), self.model_box.count()):
             self.model_box.model().item(i).setEnabled(False)
+        self.model_box.setToolTip("Model used for the scan. Greyed-out models are not available yet.")
+        self.repo.setToolTip("Repository to scan. Not used in demo mode.")
         self.demo = QCheckBox("Demo")
+        self.demo.setToolTip("Replay sample data. No API key, network or Claude access needed.")
         self.demo.setChecked(True)
         self.scan_btn = QPushButton("Scan")
+        self.scan_btn.setToolTip("Hunt: look for exploitable vulnerabilities (demo replay only).")
         self.scan_btn.setObjectName("primary")
         self.scan_btn.clicked.connect(self.start_scan)
 
@@ -268,6 +272,9 @@ class ScanPage(QWidget):
         self.fix_btn.setObjectName("primary")
         self.verify_btn = QPushButton("Verify")
         self.report_btn = QPushButton("Report")
+        self.fix_btn.setToolTip("Fix: propose a remediation for the selected finding (not implemented yet).")
+        self.verify_btn.setToolTip("Verify: check that the selected finding is actually fixed (not implemented yet).")
+        self.report_btn.setToolTip("Report: export the selected finding (not implemented yet).")
         actions = QHBoxLayout()
         actions.setSpacing(10)
         for btn in (self.fix_btn, self.verify_btn, self.report_btn):
@@ -355,7 +362,9 @@ class ScanPage(QWidget):
 
     def _fill_table(self, findings):
         self.tracker.update_counts(findings)
-        findings = sorted(findings, key=lambda f: SEVERITY_ORDER.index(f.severity))
+        # A severity outside SEVERITY_ORDER sorts last instead of raising.
+        findings = sorted(findings, key=lambda f: SEVERITY_ORDER.index(f.severity)
+                          if f.severity in SEVERITY_ORDER else len(SEVERITY_ORDER))
         self.table.setRowCount(len(findings))
         for row, f in enumerate(findings):
             for col, value in enumerate([f.id, f.severity, f.title, f.location, f.status]):
@@ -433,9 +442,6 @@ class MainWindow(QMainWindow):
     def new_scan(self):
         self.scan_page.reset()
         self.stack.setCurrentIndex(self.SCAN)
-
-    def show_stats(self):
-        self.stack.setCurrentIndex(self.STATS)
 
     def open_record(self, row):
         self.scan_page.show_record(self.history[row])
