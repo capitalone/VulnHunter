@@ -17,7 +17,7 @@ from mock_data import (
 
 
 STYLE = """
-QWidget { color: #E6EEF8; font-size: 24px; }
+QWidget { color: #E6EEF8; font-size: 18px; }
 QMainWindow, QWidget#root { background: #0A1424; }
 QDialog, QMessageBox { background: #111E33; }
 QFrame#header { background: #0F2747; border: 0; border-bottom: 1px solid #1F4E8C; }
@@ -57,6 +57,17 @@ QScrollBar:horizontal { background: #111E33; height: 12px; margin: 0; }
 QScrollBar::handle:horizontal { background: #243B5C; border-radius: 5px; min-width: 24px; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 """
+
+
+MIN_WINDOW_SIZE = (1300, 700)
+PREFERRED_WINDOW_SIZE = (1360, 920)
+
+
+def default_window_size(screen_width, screen_height):
+    """Preferred size, shrunk to fit the available screen but never below the minimum."""
+    width = min(PREFERRED_WINDOW_SIZE[0], int(screen_width * 0.95))
+    height = min(PREFERRED_WINDOW_SIZE[1], int(screen_height * 0.92))
+    return max(width, MIN_WINDOW_SIZE[0]), max(height, MIN_WINDOW_SIZE[1])
 
 
 def make_table(headers):
@@ -189,12 +200,12 @@ class HistoryPage(QWidget):
         self.table = make_table(
             ["Repository", "Model", "Mode", "Date", "Findings", "Tokens", "Duration"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.setColumnWidth(1, 150)
-        self.table.setColumnWidth(2, 90)
-        self.table.setColumnWidth(3, 130)
-        self.table.setColumnWidth(4, 90)
-        self.table.setColumnWidth(5, 80)
-        self.table.setColumnWidth(6, 90)
+        self.table.setColumnWidth(1, 160)
+        self.table.setColumnWidth(2, 100)
+        self.table.setColumnWidth(3, 150)
+        self.table.setColumnWidth(4, 115)
+        self.table.setColumnWidth(5, 100)
+        self.table.setColumnWidth(6, 115)
         self.table.cellClicked.connect(lambda row, _col: self.record_selected.emit(row))
 
         layout = QVBoxLayout(self)
@@ -233,12 +244,16 @@ class ScanPage(QWidget):
         self.repo = QLineEdit()
         self.repo.setPlaceholderText("GitHub URL or local path")
         self.model_box = QComboBox()
-        self.model_box.addItems(list(MODEL_IDS) + DISABLED_MODELS)
+        self.model_box.addItems(list(MODEL_IDS) + [f"{m} (not available yet)" for m in DISABLED_MODELS])
         for i in range(len(MODEL_IDS), self.model_box.count()):
             self.model_box.model().item(i).setEnabled(False)
+        self.model_box.setToolTip("Model used for the scan. Greyed-out models are not available yet.")
+        self.repo.setToolTip("Repository to scan. Not used in demo mode.")
         self.demo = QCheckBox("Demo")
+        self.demo.setToolTip("Replay sample data. No API key, network or Claude access needed.")
         self.demo.setChecked(True)
         self.scan_btn = QPushButton("Scan")
+        self.scan_btn.setToolTip("Hunt: look for exploitable vulnerabilities (demo replay only).")
         self.scan_btn.setObjectName("primary")
         self.scan_btn.clicked.connect(self.start_scan)
 
@@ -252,10 +267,10 @@ class ScanPage(QWidget):
         # Findings table
         self.table = make_table(["ID", "Severity", "Finding", "Location", "Status"])
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table.setColumnWidth(0, 110)
-        self.table.setColumnWidth(1, 100)
-        self.table.setColumnWidth(3, 240)
-        self.table.setColumnWidth(4, 120)
+        self.table.setColumnWidth(0, 115)
+        self.table.setColumnWidth(1, 105)
+        self.table.setColumnWidth(3, 290)
+        self.table.setColumnWidth(4, 125)
         self.table.itemSelectionChanged.connect(self._update_buttons)
         self.tracker = SeverityTracker()
         body = QHBoxLayout()
@@ -268,6 +283,9 @@ class ScanPage(QWidget):
         self.fix_btn.setObjectName("primary")
         self.verify_btn = QPushButton("Verify")
         self.report_btn = QPushButton("Report")
+        self.fix_btn.setToolTip("Fix: propose a remediation for the selected finding (not implemented yet).")
+        self.verify_btn.setToolTip("Verify: check that the selected finding is actually fixed (not implemented yet).")
+        self.report_btn.setToolTip("Report: export the selected finding (not implemented yet).")
         actions = QHBoxLayout()
         actions.setSpacing(10)
         for btn in (self.fix_btn, self.verify_btn, self.report_btn):
@@ -355,7 +373,9 @@ class ScanPage(QWidget):
 
     def _fill_table(self, findings):
         self.tracker.update_counts(findings)
-        findings = sorted(findings, key=lambda f: SEVERITY_ORDER.index(f.severity))
+        # A severity outside SEVERITY_ORDER sorts last instead of raising.
+        findings = sorted(findings, key=lambda f: SEVERITY_ORDER.index(f.severity)
+                          if f.severity in SEVERITY_ORDER else len(SEVERITY_ORDER))
         self.table.setRowCount(len(findings))
         for row, f in enumerate(findings):
             for col, value in enumerate([f.id, f.severity, f.title, f.location, f.status]):
@@ -378,7 +398,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("VulnHunter")
-        self.resize(1180, 620)
+        self.setMinimumSize(*MIN_WINDOW_SIZE)
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.resize(*default_window_size(screen.width(), screen.height()))
         self.history = list(SEED_HISTORY)  # newest first; held in memory only
 
         self.home_page = HomePage()
@@ -433,9 +455,6 @@ class MainWindow(QMainWindow):
     def new_scan(self):
         self.scan_page.reset()
         self.stack.setCurrentIndex(self.SCAN)
-
-    def show_stats(self):
-        self.stack.setCurrentIndex(self.STATS)
 
     def open_record(self, row):
         self.scan_page.show_record(self.history[row])
