@@ -60,7 +60,7 @@ QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 
 
 MIN_WINDOW_SIZE = (1300, 700)
-PREFERRED_WINDOW_SIZE = (1360, 820)
+PREFERRED_WINDOW_SIZE = (1360, 920)
 
 
 def default_window_size(screen_width, screen_height):
