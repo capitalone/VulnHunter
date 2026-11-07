@@ -1,3 +1,47 @@
+# CIS PROJECT README
+
+# Quick Rundown
+**VulnGUI** Is a working user interface made to connect with the Vulnhunter Security tool. 
+For an explanation of Vulnhunter, scroll down to the **Vulnhunter** Section below. 
+
+The GUI contains mock data currently, and will eventually be populated by Vulnhunter Scan outputs, the end goal being a completed user interface so that vulnhunter can run in the background, and commands can be turned into simple button presses. 
+
+# Vulnhunter Tool Testing (For Those who want to test) 
+### Follow the Usage Guide Below
+## NOTE: 
+If you have a claude sub, and decide to test the tool, please send footage and or results to tyler.sutowski@temple.edu 
+
+# The GUI (For those who just want the release) 
+
+### Windows: use the release
+Go to the Releases page, download the most recent release, and extract the package. The release is a Windows `.exe`.
+
+### macOS, Linux, or running from source
+The GUI is a PyQt5 app. It currently runs on sample data only, so **demo mode needs no API key, no network, and no Claude access**. You do not need Claude Code or Claude Opus to try it.
+
+```bash
+git clone https://github.com/Capstone-Projects-2026-Fall/VulnHunter.git
+cd VulnHunter
+python -m venv .venv
+source .venv/bin/activate        # Windows PowerShell: .venv\Scripts\Activate.ps1
+pip install -r gui/requirements.txt
+python gui/designs/merged/app.py
+```
+
+Leave the **Demo** box checked and press **Scan**. Live scans are not implemented yet.
+
+To run the GUI tests (sample data only):
+
+```bash
+pip install -r gui/requirements-dev.txt
+cd gui/designs/merged
+python -m pytest -v          # on a headless Linux machine: QT_QPA_PLATFORM=offscreen python -m pytest -v
+```
+
+The sections below this one describe the upstream VulnHunter tool, which does require Claude Opus access.
+
+
+
 # VulnHunter
 
 > **From pattern-matching to provability.**
