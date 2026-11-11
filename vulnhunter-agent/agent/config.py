@@ -936,3 +936,44 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         repo_properties=repo_properties_cfg,
         source_path=config_path,
     )
+
+_ACTIVE_CONFIGS = {
+    "claude": {"api_key": "", "base_url": "", "model_id": "claude-sonnet-5-5"},
+    "deepseek": {"api_key": "", "base_url": "https://api.deepseek.com/anthropic", "model_id": "deepseek-chat"},
+    "gemini": {"api_key": "", "base_url": "", "model_id": "gemini-2.5-flash"},
+}
+
+_active_provider = "claude"
+
+def set_provider_config(provider, settings_dict):
+    """Updates config settings from the GUI connector tab."""
+    global _active_provider
+    if provider in _ACTIVE_CONFIGS:
+        _ACTIVE_CONFIGS[provider].update(settings_dict)
+        _active_provider = provider
+
+def get_active_provider():
+    return _active_provider
+
+def get_active_client():
+    """Returns an initialized client instance based on the currently active provider."""
+    provider = _active_provider
+    cfg = _ACTIVE_CONFIGS.get(provider, {})
+    api_key = cfg.get("api_key") or os.getenv(f"{provider.upper()}_API_KEY", "")
+    
+    if not api_key:
+        raise ValueError(f"No API key configured for provider: {provider}")
+
+    if provider in ("claude", "deepseek"):
+        import anthropic
+        kwargs = {"api_key": api_key}
+        if cfg.get("base_url"):
+            kwargs["base_url"] = cfg["base_url"]
+        return "anthropic", anthropic.Anthropic(**kwargs), cfg["model_id"]
+    
+    elif provider == "gemini":
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        return "gemini", client, cfg["model_id"]
+    
+    raise ValueError(f"Unknown provider: {provider}")

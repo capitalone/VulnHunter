@@ -130,7 +130,8 @@ class ApiConnectorPage(QWidget):
 
         card = QFrame()
         card.setObjectName("card")
-        card.setMaximumWidth(640)
+        card.setMaximumWidth(1400)
+        card.setMaximumHeight(1500)
         cl = QVBoxLayout(card)
         cl.setContentsMargins(20, 20, 20, 20)
         cl.setSpacing(16)
@@ -233,3 +234,4 @@ class ApiConnectorPage(QWidget):
         if provider == self._current:
             self.settings[provider] = self._form_values()
         return dict(self.settings.get(provider, {}))
+    

@@ -23,7 +23,6 @@ from gui.data.mock_data import (
     sample_snippet, split_location,
 )
 from llm_connector.conn_all_llm import LLMConnector
-
 from gui.api_conn_page import ApiConnectorPage
 
 STYLE = """
@@ -136,6 +135,10 @@ class SeverityTracker(QFrame):
 class HomePage(QWidget):
     dashboard_requested = pyqtSignal()
     stats_requested = pyqtSignal()
+    # Conn to api
+    dashboard_requested = pyqtSignal()
+    stats_requested = pyqtSignal()
+    connector_requested = pyqtSignal()   
 
     def __init__(self):
         super().__init__()
@@ -157,12 +160,18 @@ class HomePage(QWidget):
         open_btn_2.setObjectName("primary")
         open_btn_2.clicked.connect(self.stats_requested.emit)
 
+        # Button For API connector
+        open_btn_3 = QPushButton("API Connector")   # NEW
+        open_btn_3.setObjectName("primary")
+        open_btn_3.clicked.connect(self.connector_requested.emit)
+
 
         button_row = QHBoxLayout()
         button_row.setSpacing(20)
         button_row.addStretch()
         button_row.addWidget(open_btn)
         button_row.addWidget(open_btn_2)
+        button_row.addWidget(open_btn_3)
         button_row.addStretch()
 
         layout = QVBoxLayout(self)
@@ -622,7 +631,7 @@ class ScanPage(QWidget):
 
 
 class MainWindow(QMainWindow):
-    HOME, HISTORY, SCAN, STATS = 0, 1, 2, 3
+    HOME, HISTORY, SCAN, STATS, CONNECT = 0, 1, 2, 3, 4
 
     def __init__(self):
         super().__init__()
@@ -637,12 +646,18 @@ class MainWindow(QMainWindow):
         self.history_page = HistoryPage()
         self.scan_page = ScanPage(SAMPLE_FINDINGS, SAMPLE_OUTPUT)
         self.stats_page = StatsPage()
+        self.connector_page = ApiConnectorPage()
+        self.connector_page.connected.connect(self.on_llm_connected)
+        self.connector_page.disconnected.connect(self.on_llm_disconnected)
+        self.connected_provider = None
         self.stack = QStackedWidget()
         self.stack.addWidget(self.home_page)
         self.stack.addWidget(self.history_page)
         self.stack.addWidget(self.scan_page)
         self.stack.addWidget(self.stats_page)
+        self.stack.addWidget(self.connector_page)
         self.home_page.stats_requested.connect(self.show_stats)
+        self.home_page.connector_requested.connect(self.show_connector)
 
         # Shared header: one home button, centered, visible on every page
         header = QFrame()
@@ -678,6 +693,17 @@ class MainWindow(QMainWindow):
 
     def show_stats(self):
         self.stack.setCurrentIndex(self.STATS)
+
+    def show_connector(self):
+        self.stack.setCurrentIndex(self.CONNECT)
+
+    def on_llm_connected(self, provider_key, provider_label):
+        self.connected_provider = (provider_key, provider_label)
+        print(f"Successfully connected to {provider_label} ({provider_key})")
+
+    def on_llm_disconnected(self):
+        self.connected_provider = None
+        print("LLM disconnected.")
 
     def show_history(self):
         self.stack.setCurrentIndex(self.HISTORY)
