@@ -10,11 +10,13 @@ mock GUI behaves as designed; they do not test real VulnHunter output.
 """
 
 import pytest
-from PyQt5.QtWidgets import QApplication, QMessageBox
+from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtGui import QKeyEvent
+from PyQt5.QtWidgets import QApplication, QLabel, QMessageBox
 
-import app as gui
-from app import HistoryPage, MainWindow, ScanPage
-from mock_data import (
+from gui import main_gui as gui
+from gui.main_gui import HistoryPage, MainWindow, ScanPage
+from gui.data.mock_data import (
     DISABLED_MODELS, MODEL_IDS, SAMPLE_FINDINGS, SAMPLE_OUTPUT, SEED_HISTORY,
     SEVERITY_ORDER, Finding,
 )
@@ -217,6 +219,124 @@ def test_main_window_uses_minimum_size(qapp):
     assert (window.minimumWidth(), window.minimumHeight()) == gui.MIN_WINDOW_SIZE
     assert window.width() >= gui.MIN_WINDOW_SIZE[0]
     assert window.height() >= gui.MIN_WINDOW_SIZE[1]
+
+
+def test_main_window_zoom_shortcuts_scale_contents_not_window(qapp):
+    window = MainWindow()
+    window.show()
+    qapp.processEvents()
+    initial_size = (window.width(), window.height())
+    initial_column_width = window.scan_page.table.columnWidth(0)
+    history_table = window.history_page.table
+    initial_stylesheet = window.styleSheet()
+    window.reset_zoom()
+    qapp.processEvents()
+    assert window.styleSheet() == initial_stylesheet
+    home_title_font = window.home_button.font()
+    home_title_metrics = (
+        window.home_button.fontMetrics().height(),
+        window.home_button.fontMetrics().horizontalAdvance(window.home_button.text()),
+    )
+    page_title = window.home_page.findChildren(QLabel)[0]
+    font_heights = [
+        (
+            page_title.fontMetrics().height(),
+            window.scan_page.repo.fontMetrics().height(),
+            history_table.fontMetrics().height(),
+        )
+    ]
+
+    window.zoom_in()
+    assert window._zoom == pytest.approx(window.DEFAULT_ZOOM + window.ZOOM_STEP)
+    qapp.processEvents()
+    font_heights.append((
+        page_title.fontMetrics().height(),
+        window.scan_page.repo.fontMetrics().height(),
+        history_table.fontMetrics().height(),
+    ))
+    assert all(new > old for old, new in zip(font_heights[-2], font_heights[-1]))
+    window.reset_zoom()
+    qapp.processEvents()
+
+    for _ in range(2):
+        window.zoom_in()
+        qapp.processEvents()
+        font_heights.append((
+            page_title.fontMetrics().height(),
+            window.scan_page.repo.fontMetrics().height(),
+            history_table.fontMetrics().height(),
+        ))
+    assert all(
+        all(new > old for old, new in zip(previous, current))
+        for previous, current in zip(font_heights, font_heights[1:])
+    )
+
+    max_steps = round((window.MAX_ZOOM - 1.2) / window.ZOOM_STEP)
+    for _ in range(max_steps):
+        window.zoom_in()
+    assert (window.width(), window.height()) == initial_size
+    assert window._zoom == window.MAX_ZOOM
+    assert f"QWidget {{ color: #E6EEF8; font-size: {round(18 * window._zoom)}px; }}" in window.styleSheet()
+    qapp.processEvents()
+    home_button = window.home_button
+    assert "QPushButton#home { font-size: 20px; }" in window.styleSheet()
+    assert home_button.width() >= 260
+    assert home_button.width() > home_button.fontMetrics().horizontalAdvance(home_button.text())
+    assert home_button.height() >= 48
+    assert (
+        home_button.fontMetrics().height(),
+        home_button.fontMetrics().horizontalAdvance(home_button.text()),
+    ) == home_title_metrics
+    assert window.scan_page.table.columnWidth(0) == initial_column_width
+    assert window.scan_page.table.wordWrap()
+    assert f"QTableWidget {{ font-size: {round(18 * window._zoom)}px; }}" in window.styleSheet()
+    assert f"QHeaderView::section {{ font-size: {round(18 * window._zoom)}px; }}" in window.styleSheet()
+    window.scan_page._fill_table(SAMPLE_FINDINGS)
+    assert f"QTableWidget {{ font-size: {round(18 * window._zoom)}px; }}" in window.styleSheet()
+
+    max_zoom_stylesheet = window.styleSheet()
+    max_zoom_table_rule = f"QTableWidget {{ font-size: {round(18 * window._zoom)}px; }}"
+    for _ in range(3):
+        window.zoom_in()
+    assert window.styleSheet() == max_zoom_stylesheet
+    assert max_zoom_table_rule in window.styleSheet()
+
+    min_steps = round((window.MAX_ZOOM - window.MIN_ZOOM) / window.ZOOM_STEP)
+    for _ in range(min_steps):
+        window.zoom_out()
+    assert window._zoom == window.MIN_ZOOM
+    min_zoom_stylesheet = window.styleSheet()
+    for _ in range(3):
+        window.zoom_out()
+    assert window.styleSheet() == min_zoom_stylesheet
+
+    window.reset_zoom()
+    assert window._zoom == window.DEFAULT_ZOOM
+    assert window.styleSheet() == initial_stylesheet
+    assert (window.width(), window.height()) == initial_size
+    assert window.scan_page.table.columnWidth(0) == initial_column_width
+    assert (
+        home_button.fontMetrics().height(),
+        home_button.fontMetrics().horizontalAdvance(home_button.text()),
+    ) == home_title_metrics
+    window.close()
+
+
+def test_zoom_shortcut_accepts_key_repeat(qapp):
+    window = MainWindow()
+    repeated_plus = QKeyEvent(
+        QEvent.KeyPress, Qt.Key_Plus, Qt.ControlModifier, "+", True
+    )
+
+    assert window._handle_zoom_shortcut(repeated_plus)
+    assert window._zoom == window.DEFAULT_ZOOM + window.ZOOM_STEP
+
+    repeated_minus = QKeyEvent(
+        QEvent.KeyPress, Qt.Key_Minus, Qt.MetaModifier, "-", True
+    )
+    assert window._handle_zoom_shortcut(repeated_minus)
+    assert window._zoom == window.DEFAULT_ZOOM
+    window.close()
 
 
 def test_base_font_size_is_larger_than_original():

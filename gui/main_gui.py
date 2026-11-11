@@ -1,3 +1,4 @@
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -7,13 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QFont
+from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
-    QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget,
+    QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from gui.data.mock_data import (
@@ -31,6 +31,11 @@ QDialog, QMessageBox { background: #111E33; }
 QFrame#header { background: #0F2747; border: 0; border-bottom: 1px solid #1F4E8C; }
 QFrame#card { background: #111E33; border: 1px solid #243B5C; border-radius: 5px; }
 QFrame#card QLabel { background: transparent; }
+QLabel#severityHeading { font-size: 12px; font-weight: 600; }
+QLabel#severityHeadline { font-size: 18px; font-weight: 600; }
+QLabel#severityDetail { font-size: 11px; }
+QLabel#homeTitle, QLabel#statsTitle { font-size: 32px; font-weight: 600; }
+QLabel#cardValue { font-size: 18px; font-weight: 600; }
 QPushButton#home {
     background: transparent; border: 0; color: #E6EEF8; font-size: 20px;
     font-weight: 600; padding: 0 12px;
@@ -58,7 +63,10 @@ QTableWidget {
     selection-background-color: #1B4B7A; selection-color: #E6EEF8;
 }
 QHeaderView::section { background: #172A47; border: 0; padding: 9px 12px; font-weight: 600; }
-QPlainTextEdit { background: #08101D; border: 1px solid #243B5C; color: #E6EEF8; }
+QPlainTextEdit {
+    background: #08101D; border: 1px solid #243B5C; color: #E6EEF8;
+    font-family: Consolas; font-size: 10px;
+}
 QScrollBar:vertical { background: #111E33; width: 12px; margin: 0; }
 QScrollBar::handle:vertical { background: #243B5C; border-radius: 5px; min-height: 24px; }
 QScrollBar:horizontal { background: #111E33; height: 12px; margin: 0; }
@@ -78,10 +86,29 @@ def default_window_size(screen_width, screen_height):
     return max(width, MIN_WINDOW_SIZE[0]), max(height, MIN_WINDOW_SIZE[1])
 
 
+def scaled_stylesheet(stylesheet, scale):
+    return re.sub(
+        r"(?<![\w.-])(\d+(?:\.\d+)?)px\b",
+        lambda match: f"{round(float(match.group(1)) * scale)}px",
+        stylesheet,
+    )
+
+
+def zoom_stylesheet(scale):
+    stylesheet = scaled_stylesheet(STYLE, scale)
+    return (
+        f"{stylesheet}\n"
+        "QPushButton#home { font-size: 20px; }\n"
+        f"QTableWidget {{ font-size: {round(18 * scale)}px; }}\n"
+        f"QHeaderView::section {{ font-size: {round(18 * scale)}px; }}"
+    )
+
+
 def make_table(headers):
     table = QTableWidget(0, len(headers))
     table.setHorizontalHeaderLabels(headers)
     table.verticalHeader().setVisible(False)
+    table.setWordWrap(True)
     table.setSelectionBehavior(QAbstractItemView.SelectRows)
     table.setSelectionMode(QAbstractItemView.SingleSelection)
     table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -99,15 +126,15 @@ class SeverityTracker(QFrame):
         self.setFixedWidth(200)
         box = QVBoxLayout(self)
         heading = QLabel("Severity")
-        heading.setFont(QFont("Segoe UI", 12, QFont.DemiBold))
+        heading.setObjectName("severityHeading")
         box.addWidget(heading)
         self.counts = {}
         for i, name in enumerate(SEVERITY_ORDER):
             headline = i < self.HEADLINE_TIERS
             label = QLabel(name)
             count = QLabel("0")
-            for w in (label, count):
-                w.setFont(QFont("Segoe UI", 18 if headline else 11, QFont.DemiBold if headline else QFont.Normal))
+            label.setObjectName("severityHeadline" if headline else "severityDetail")
+            count.setObjectName("severityHeadline" if headline else "severityDetail")
             if headline:
                 count.setStyleSheet("color: #38BDF8;")
             row = QHBoxLayout()
@@ -131,7 +158,7 @@ class HomePage(QWidget):
         super().__init__()
 
         title = QLabel("VulnHunter")
-        title.setFont(QFont("Segoe UI", 32, QFont.DemiBold))
+        title.setObjectName("homeTitle")
         title.setAlignment(Qt.AlignCenter)
 
         subtitle = QLabel("Welcome to VulnGUI.")
@@ -166,7 +193,7 @@ class StatsPage(QWidget):
     def __init__(self):
         super().__init__()
         title = QLabel("Vulnerabilities Burndown")
-        title.setFont(QFont("Segoe UI", 32, QFont.DemiBold))
+        title.setObjectName("statsTitle")
         title.setAlignment(Qt.AlignCenter)
 
         layout = QVBoxLayout(self)
@@ -199,7 +226,7 @@ class HistoryPage(QWidget):
             card.setObjectName("card")
             box = QVBoxLayout(card)
             value = QLabel("0")
-            value.setFont(QFont("Segoe UI", 18, QFont.DemiBold))
+            value.setObjectName("cardValue")
             box.addWidget(value)
             box.addWidget(QLabel(name))
             self.card_values[name] = value
@@ -234,6 +261,7 @@ class HistoryPage(QWidget):
                       rec.tokens, rec.duration]
             for col, value in enumerate(values):
                 self.table.setItem(row, col, QTableWidgetItem(value))
+        self.table.resizeRowsToContents()
 
 
 class ScanPage(QWidget):
@@ -304,7 +332,6 @@ class ScanPage(QWidget):
         # Output
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
-        self.output.setFont(QFont("Consolas", 10))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -409,6 +436,7 @@ class ScanPage(QWidget):
         for row, f in enumerate(findings):
             for col, value in enumerate([f.id, f.severity, f.title, f.location, f.status]):
                 self.table.setItem(row, col, QTableWidgetItem(value))
+        self.table.resizeRowsToContents()
         if findings:
             self.table.selectRow(0)
 
@@ -423,11 +451,19 @@ class ScanPage(QWidget):
 
 class MainWindow(QMainWindow):
     HOME, HISTORY, SCAN, STATS = 0, 1, 2, 3
+    MIN_ZOOM = 0.7
+    MAX_ZOOM = 2.0
+    DEFAULT_ZOOM = 1.0
+    ZOOM_STEP = 0.1
 
     def __init__(self):
         super().__init__()
+        self._zoom = self.DEFAULT_ZOOM
         self.setWindowTitle("VulnHunter")
         self.setMinimumSize(*MIN_WINDOW_SIZE)
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
         screen = QApplication.primaryScreen().availableGeometry()
         self.resize(*default_window_size(screen.width(), screen.height()))
         self.history = list(SEED_HISTORY)  # newest first; held in memory only
@@ -446,11 +482,13 @@ class MainWindow(QMainWindow):
         # Shared header: one home button, centered, visible on every page
         header = QFrame()
         header.setObjectName("header")
-        header.setFixedHeight(56)
+        header.setFixedHeight(72)
         home = QPushButton("VulnHunter")
         home.setObjectName("home")
+        home.setMinimumSize(260, 48)
         home.setCursor(Qt.PointingHandCursor)
         home.clicked.connect(self.show_home)
+        self.home_button = home
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(24, 0, 24, 0)
         header_layout.addStretch()
@@ -471,6 +509,7 @@ class MainWindow(QMainWindow):
         self.history_page.record_selected.connect(self.open_record)
         self.scan_page.finished.connect(self.add_record)
         self.history_page.refresh(self.history)
+        self._apply_zoom(self.DEFAULT_ZOOM)
 
     def show_home(self):
         self.stack.setCurrentIndex(self.HOME)
@@ -493,10 +532,64 @@ class MainWindow(QMainWindow):
         self.history.insert(0, record)
         self.history_page.refresh(self.history)
 
+    def _clamp_zoom(self, zoom):
+        bounded_zoom = max(self.MIN_ZOOM, min(self.MAX_ZOOM, zoom))
+        return round(bounded_zoom, 2)
+
+    def _apply_zoom(self, target_zoom):
+        self._zoom = self._clamp_zoom(target_zoom)
+        stylesheet = zoom_stylesheet(self._zoom)
+        if self.styleSheet() != stylesheet:
+            self.setStyleSheet(stylesheet)
+        for table in self.findChildren(QTableWidget):
+            table.resizeRowsToContents()
+
+    def zoom_in(self):
+        target_zoom = self._clamp_zoom(self._zoom + self.ZOOM_STEP)
+        if target_zoom > self._zoom:
+            self._apply_zoom(target_zoom)
+
+    def zoom_out(self):
+        target_zoom = self._clamp_zoom(self._zoom - self.ZOOM_STEP)
+        if target_zoom < self._zoom:
+            self._apply_zoom(target_zoom)
+
+    def reset_zoom(self):
+        self._apply_zoom(self.DEFAULT_ZOOM)
+
+    def _handle_zoom_shortcut(self, event):
+        modifiers = event.modifiers()
+        is_zoom_modifier = bool(modifiers & (Qt.ControlModifier | Qt.MetaModifier))
+        if not is_zoom_modifier:
+            return False
+
+        if event.key() in (Qt.Key_Plus, Qt.Key_Equal):
+            self.zoom_in()
+            event.accept()
+            return True
+        if event.key() in (Qt.Key_Minus, Qt.Key_Underscore):
+            self.zoom_out()
+            event.accept()
+            return True
+        if event.key() == Qt.Key_0:
+            self.reset_zoom()
+            event.accept()
+            return True
+        return False
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress and self._handle_zoom_shortcut(event):
+            return True
+        return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event):
+        if self._handle_zoom_shortcut(event):
+            return
+        super().keyPressEvent(event)
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setStyleSheet(STYLE)
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
