@@ -10,7 +10,7 @@ mock GUI behaves as designed; they do not test real VulnHunter output.
 """
 
 import pytest
-from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtCore import QEvent, QPoint, Qt
 from PyQt5.QtGui import QKeyEvent
 from PyQt5.QtWidgets import QApplication, QLabel, QMessageBox
 
@@ -104,6 +104,44 @@ def test_empty_history_page(qapp):
     assert [label.text() for label in page.card_values.values()] == ["0", "0", "0"]
 
 
+def test_history_header_click_toggles_sort_and_right_click_clears(qapp):
+    page = HistoryPage()
+    page.refresh(SEED_HISTORY)
+    selected = []
+    page.record_selected.connect(selected.append)
+    header = page.table.horizontalHeader()
+
+    header.sectionClicked.emit(3)
+    assert table_column(page, 3) == [
+        "Oct 18, 2026", "Oct 20, 2026", "Oct 23, 2026", "Oct 24, 2026"]
+    assert header.sortIndicatorOrder() == Qt.AscendingOrder
+    page.table.cellClicked.emit(0, 0)
+    assert selected == [3]
+
+    header.sectionClicked.emit(3)
+    assert table_column(page, 3) == [
+        "Oct 24, 2026", "Oct 23, 2026", "Oct 20, 2026", "Oct 18, 2026"]
+    assert header.sortIndicatorOrder() == Qt.DescendingOrder
+
+    header.sectionClicked.emit(3)
+    assert table_column(page, 3) == [
+        "Oct 18, 2026", "Oct 20, 2026", "Oct 23, 2026", "Oct 24, 2026"]
+    assert header.sortIndicatorOrder() == Qt.AscendingOrder
+
+    header.customContextMenuRequested.emit(QPoint(0, 0))
+    assert table_column(page, 3) == [record.date for record in SEED_HISTORY]
+    assert not header.isSortIndicatorShown()
+
+
+def test_history_numeric_columns_sort_by_value(qapp):
+    page = HistoryPage()
+    page.refresh(SEED_HISTORY)
+
+    page.sort_by_column(4)
+
+    assert table_column(page, 4) == ["0", "1", "7", "7"]
+
+
 def test_scan_with_zero_findings(qapp):
     page = ScanPage([], SAMPLE_OUTPUT)
     run_demo_scan(page)
@@ -195,12 +233,54 @@ def test_model_dropdown_selection_can_change(qapp):
 def test_home_navigation(qapp):
     window = MainWindow()
     assert window.stack.currentIndex() == window.HOME
+    assert not window.back_button.isEnabled()
+    assert not window.forward_button.isEnabled()
+
     window.home_page.dashboard_requested.emit()
     assert window.stack.currentIndex() == window.HISTORY
     window.show_stats()
     assert window.stack.currentIndex() == window.STATS
+
+    window.go_back()
+    assert window.stack.currentIndex() == window.HISTORY
+    assert window.back_button.isEnabled()
+    assert window.forward_button.isEnabled()
+    window.go_forward()
+    assert window.stack.currentIndex() == window.STATS
+    assert not window.forward_button.isEnabled()
+
+
+def test_navigation_shortcuts_and_branching_history(qapp):
+    window = MainWindow()
+    window.show_history()
+    window.show_stats()
+
+    back_event = QKeyEvent(QEvent.KeyPress, Qt.Key_Left, Qt.ControlModifier)
+    QApplication.sendEvent(window.home_button, back_event)
+    assert window.stack.currentIndex() == window.HISTORY
+
+    command_forward_event = QKeyEvent(
+        QEvent.KeyPress, Qt.Key_Right, Qt.MetaModifier)
+    QApplication.sendEvent(window.home_button, command_forward_event)
+    assert window.stack.currentIndex() == window.STATS
+
+    command_back_event = QKeyEvent(QEvent.KeyPress, Qt.Key_Left, Qt.MetaModifier)
+    QApplication.sendEvent(window.home_button, command_back_event)
+    assert window.stack.currentIndex() == window.HISTORY
+
+    forward_event = QKeyEvent(
+        QEvent.KeyPress, Qt.Key_Right, Qt.ControlModifier)
+    QApplication.sendEvent(window.home_button, forward_event)
+    assert window.stack.currentIndex() == window.STATS
+
+    window.go_back()
     window.show_home()
     assert window.stack.currentIndex() == window.HOME
+    assert not window.forward_button.isEnabled()
+    assert window.back_button.text() == "‹"
+    assert window.forward_button.text() == "›"
+    assert window.back_button.objectName() == "backNavigation"
+    assert window.forward_button.objectName() == "forwardNavigation"
 
 
 def test_default_window_size_fits_screen_but_not_below_minimum():
