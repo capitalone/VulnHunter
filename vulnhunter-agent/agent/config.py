@@ -27,6 +27,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# Anthropic-compatible endpoint DeepSeek exposes for Claude Code / the SDK.
+# Must NOT end in /v1 — the CLI appends /v1/messages itself.
+DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com/anthropic"
+
 
 @dataclass(frozen=True)
 class AnthropicConfig:
@@ -53,6 +57,13 @@ class AnthropicConfig:
     #                     are not allow-listed, so container/instance-role
     #                     credentials require widening the sandbox network
     #                     allow-list or disabling the sandbox.
+    #   "deepseek"      — route the bundled Claude Code CLI to DeepSeek's
+    #                     Anthropic-compatible endpoint. The key is read from
+    #                     [anthropic].api_key or the DEEPSEEK_API_KEY env var
+    #                     (never ANTHROPIC_API_KEY, so a Claude key is not sent
+    #                     to DeepSeek). base_url defaults to
+    #                     DEEPSEEK_DEFAULT_BASE_URL. Use DeepSeek model IDs
+    #                     (e.g. "deepseek-v4-pro") as the model.
     model: str
     auth_mode: str = "api_key"
     api_key: str = ""
@@ -62,6 +73,8 @@ class AnthropicConfig:
     # config/credentials file. Blank → the CLI uses the default credential
     # chain (AWS_* env vars, default profile, SSO, container/instance role).
     aws_profile: str = ""
+    # deepseek mode only: Anthropic-compatible base URL the CLI calls.
+    base_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -434,16 +447,25 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         .strip()
         .lower()
     )
-    if auth_mode not in ("api_key", "bedrock_oauth", "bedrock_sigv4"):
+    if auth_mode not in ("api_key", "bedrock_oauth", "bedrock_sigv4", "deepseek"):
         raise ValueError(
-            "anthropic.auth_mode must be 'api_key', 'bedrock_oauth', or "
-            f"'bedrock_sigv4', got '{auth_mode}'"
+            "anthropic.auth_mode must be 'api_key', 'bedrock_oauth', "
+            f"'bedrock_sigv4', or 'deepseek', got '{auth_mode}'"
         )
     # api_key resolves from [anthropic].api_key / VULNHUNT_ANTHROPIC_API_KEY,
-    # falling back to the standard ANTHROPIC_API_KEY env var.
+    # falling back to the provider's standard env var: DEEPSEEK_API_KEY in
+    # deepseek mode, ANTHROPIC_API_KEY otherwise.
+    fallback_key_env = (
+        "DEEPSEEK_API_KEY" if auth_mode == "deepseek" else "ANTHROPIC_API_KEY"
+    )
     api_key = str(
         _resolve(anthropic_raw, "anthropic", "api_key", default="")
-    ) or os.environ.get("ANTHROPIC_API_KEY", "")
+    ) or os.environ.get(fallback_key_env, "")
+    base_url = str(
+        _resolve(anthropic_raw, "anthropic", "base_url", default="")
+    ).strip()
+    if auth_mode == "deepseek" and not base_url:
+        base_url = DEEPSEEK_DEFAULT_BASE_URL
     anthropic = AnthropicConfig(
         model=str(_resolve(anthropic_raw, "anthropic", "model", required=True)),
         auth_mode=auth_mode,
@@ -457,6 +479,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         aws_profile=str(
             _resolve(anthropic_raw, "anthropic", "aws_profile", default="")
         ).strip(),
+        base_url=base_url,
     )
     if auth_mode == "bedrock_oauth" and not anthropic.bedrock_base_url:
         raise ValueError(
@@ -468,6 +491,19 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         raise ValueError(
             "anthropic.auth_mode='bedrock_sigv4' requires anthropic.aws_region"
         )
+    if auth_mode == "deepseek":
+        if not anthropic.api_key:
+            raise ValueError(
+                "anthropic.auth_mode='deepseek' requires anthropic.api_key "
+                "or the DEEPSEEK_API_KEY env var"
+            )
+        # The CLI appends /v1/messages; a trailing /v1 yields /v1/v1/messages
+        # (404, surfaced by the CLI as a misleading model error).
+        if anthropic.base_url.rstrip("/").endswith("/v1"):
+            raise ValueError(
+                "anthropic.base_url must not end in /v1 (the CLI appends "
+                f"/v1/messages), got '{anthropic.base_url}'"
+            )
 
     oauth = OAuthConfig(
         token_endpoint=str(
@@ -900,3 +936,44 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AgentConfig:
         repo_properties=repo_properties_cfg,
         source_path=config_path,
     )
+
+_ACTIVE_CONFIGS = {
+    "claude": {"api_key": "", "base_url": "", "model_id": "claude-sonnet-5-5"},
+    "deepseek": {"api_key": "", "base_url": "https://api.deepseek.com/anthropic", "model_id": "deepseek-chat"},
+    "gemini": {"api_key": "", "base_url": "", "model_id": "gemini-2.5-flash"},
+}
+
+_active_provider = "claude"
+
+def set_provider_config(provider, settings_dict):
+    """Updates config settings from the GUI connector tab."""
+    global _active_provider
+    if provider in _ACTIVE_CONFIGS:
+        _ACTIVE_CONFIGS[provider].update(settings_dict)
+        _active_provider = provider
+
+def get_active_provider():
+    return _active_provider
+
+def get_active_client():
+    """Returns an initialized client instance based on the currently active provider."""
+    provider = _active_provider
+    cfg = _ACTIVE_CONFIGS.get(provider, {})
+    api_key = cfg.get("api_key") or os.getenv(f"{provider.upper()}_API_KEY", "")
+    
+    if not api_key:
+        raise ValueError(f"No API key configured for provider: {provider}")
+
+    if provider in ("claude", "deepseek"):
+        import anthropic
+        kwargs = {"api_key": api_key}
+        if cfg.get("base_url"):
+            kwargs["base_url"] = cfg["base_url"]
+        return "anthropic", anthropic.Anthropic(**kwargs), cfg["model_id"]
+    
+    elif provider == "gemini":
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        return "gemini", client, cfg["model_id"]
+    
+    raise ValueError(f"Unknown provider: {provider}")
