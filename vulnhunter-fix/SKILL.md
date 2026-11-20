@@ -104,9 +104,9 @@ Check your own model identity from your session system prompt (it says "You are 
 
 | You are | Action |
 |---------|--------|
-| Opus 4.x (any variant) | Proceed to Step 1. |
-| Sonnet 4.x | **Stop.** Tell the user, verbatim: `This skill is calibrated for Opus. Please run `/model claude-opus-4-8` and then re-invoke `/vulnhunter-fix`.` Do not run any other tool calls. |
-| Haiku 4.x | **Stop.** Same message as above. |
+| Opus (any version) | Proceed to Step 1. |
+| Sonnet (any version) | **Stop.** Tell the user, verbatim: `This skill is calibrated for Opus. Please run `/model claude-opus-4-8` and then re-invoke `/vulnhunter-fix`.` Do not run any other tool calls. |
+| Haiku (any version) | **Stop.** Same message as above. |
 
 This is interactive-mode only. Headless mode invokes the executor with a fixed Opus model under the hood and skips this gate.
 
