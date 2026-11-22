@@ -118,6 +118,36 @@ def test_sev_homoglyph_obfuscation_flagged(sev, tmp_path, capsys):
     assert "severity mask violation" in capsys.readouterr().err
 
 
+# The S5 homoglyph fold covered the leading 'c' and a few letters, but the
+# map omitted confusables for other letters IN the word "critical" — so a
+# look-alike on 't', 'l', or 'r' still slipped a masked severity through.
+# Per severity-mask-rule.md and the docstring above ("Common confusables for
+# the letters in 'critical' must fold"), every letter must be covered. Words
+# are built from code points so no literal homoglyph sits in this source.
+_NONCOVERED_HOMOGLYPHS = {
+    "cyrillic_te_for_t": (3, 0x0442),        # CYRILLIC SMALL LETTER TE ~ 't'
+    "cyrillic_palochka_for_l": (7, 0x04C0),  # CYRILLIC LETTER PALOCHKA ~ 'l'
+    "small_capital_r_for_r": (1, 0x0280),    # LATIN LETTER SMALL CAPITAL R ~ 'r'
+}
+
+
+@pytest.mark.parametrize(
+    "index,codepoint",
+    list(_NONCOVERED_HOMOGLYPHS.values()),
+    ids=list(_NONCOVERED_HOMOGLYPHS),
+)
+def test_sev_homoglyph_noncovered_letter_flagged(sev, tmp_path, capsys, index, codepoint):
+    """Every letter of 'critical', not just the leading 'c', must fold. A
+    Cyrillic/Latin look-alike on 't', 'l', or 'r' previously passed the gate."""
+    chars = list("critical")
+    chars[index] = chr(codepoint)
+    spoofed = "".join(chars)
+    body = tmp_path / "body.md"
+    body.write_text(f"This is a {spoofed} vulnerability.\n", encoding="utf-8")
+    assert sev.main(["check-severity-mask.py", str(body)]) == 1
+    assert "severity mask violation" in capsys.readouterr().err
+
+
 def test_sev_safe_phrase_criticism(sev, tmp_path):
     body = tmp_path / "body.md"
     body.write_text("Received constructive criticism.\n", encoding="utf-8")
