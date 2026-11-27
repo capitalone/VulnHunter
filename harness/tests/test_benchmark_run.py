@@ -67,7 +67,7 @@ def test_load_state_corrupt_starts_fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(run, "STATE_FILE", str(state_file))
     monkeypatch.setattr(run, "MODEL", "m")
     st = run.load_state()
-    assert st == {"scan_targets": {}, "judgments": {}, "model": "m"}
+    assert st == {"scan_targets": {}, "judgments": {}, "model": "unknown"}
 
 
 def test_filter_targets_by_findings():
@@ -117,21 +117,27 @@ def test_phase_clone_skips_already_cloned(monkeypatch, tmp_path):
 
 def test_phase_scan_all_skipped(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(run, "STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(run, "MODEL", "new-model")
     rd = tmp_path / "rd"
     rd.mkdir()
     targets = {"t1": {"key": "t1", "clone_dir": str(tmp_path), "findings": []}}
     state = {"scan_targets": {"t1": {"status": "scanned", "results_dir": str(rd)}},
-             "judgments": {}}
+             "judgments": {}, "model": "trial-model"}
     run.phase_scan(targets, state)
     assert "already scanned" in capsys.readouterr().out
+    assert state["model"] == "trial-model"
 
 
 def test_phase_scan_runs(monkeypatch, tmp_path):
     monkeypatch.setattr(run, "STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(run, "MODEL", "new-model")
     monkeypatch.setattr(run, "clean_prior_results", lambda cd: [])
     monkeypatch.setattr(run, "has_valid_results", lambda cd: False)
 
-    def fake_scan_targets(to_scan, max_workers=None):
+    captured = {}
+
+    def fake_scan_targets(to_scan, max_workers=None, readonly=True):
+        captured["readonly"] = readonly
         return [("t1", ScanResult("/c/t1", "t1", 0, 5, 12.0, "/c/t1/rd", {"total_cost_usd": 1.0})),
                 ("t2", ScanResult("/c/t2", "t2", 1, 0, 3.0, None, {}))]
     monkeypatch.setattr(run, "scan_targets", fake_scan_targets)
@@ -141,14 +147,20 @@ def test_phase_scan_runs(monkeypatch, tmp_path):
         "t2": {"key": "t2", "clone_dir": "/c/t2", "findings": [{"finding_id": "F2"}]},
     }
     state = {"scan_targets": {"t1": {"status": "cloned"}, "t2": {"status": "cloned"}},
-             "judgments": {"F1": {}, "F2": {}}}
+             "judgments": {"F1": {}, "F2": {}}, "model": "trial-model"}
     run.phase_scan(targets, state, force_rescan=True)
     assert state["scan_targets"]["t1"]["status"] == "scanned"
     assert state["scan_targets"]["t2"]["status"] == "scan_failed"
+    assert run.load_state()["model"] == "new-model"
+    # Default (execute=False) must scan read-only; --execute opts out.
+    assert captured["readonly"] is True
+    run.phase_scan(targets, state, force_rescan=True, execute=True)
+    assert captured["readonly"] is False
 
 
 def test_phase_scan_adopts_existing_results(monkeypatch, tmp_path):
     monkeypatch.setattr(run, "STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(run, "MODEL", "new-model")
     monkeypatch.setattr(run, "has_valid_results", lambda cd: True)
     monkeypatch.setattr(run, "find_results_dir", lambda cd: "/c/t1/rd")
 
@@ -156,9 +168,11 @@ def test_phase_scan_adopts_existing_results(monkeypatch, tmp_path):
         raise AssertionError("should not scan")
     monkeypatch.setattr(run, "scan_targets", fail_scan)
     targets = {"t1": {"key": "t1", "clone_dir": "/c/t1", "findings": []}}
-    state = {"scan_targets": {"t1": {"status": "cloned"}}, "judgments": {}}
+    state = {"scan_targets": {"t1": {"status": "cloned"}},
+             "judgments": {}, "model": "trial-model"}
     run.phase_scan(targets, state)
     assert state["scan_targets"]["t1"]["results_dir"] == "/c/t1/rd"
+    assert run.load_state()["model"] == "trial-model"
 
 
 def test_phase_judge(monkeypatch, tmp_path):
@@ -234,16 +248,22 @@ def _setup_main(monkeypatch, tmp_path):
     monkeypatch.setattr(run, "STATE_FILE", str(tmp_path / "state.json"))
     monkeypatch.setattr(run, "MODEL", "m")
     monkeypatch.setattr(run, "phase_clone", lambda t, s: None)
-    monkeypatch.setattr(run, "phase_scan", lambda t, s, force_rescan=False, max_workers=5: None)
+    monkeypatch.setattr(run, "phase_scan", lambda t, s, force_rescan=False, max_workers=5, execute=False: None)
     monkeypatch.setattr(run, "phase_judge", lambda t, s, force_rejudge=False: None)
     monkeypatch.setattr(run, "phase_tally", lambda s: None)
     monkeypatch.setattr(run, "update_history", lambda s, t: (1, 0))
 
 
-def test_main_full(monkeypatch, tmp_path):
+@pytest.mark.parametrize("args", [[], ["--judge-only"], ["--tally-only"]])
+def test_main_without_scans_preserves_model(monkeypatch, tmp_path, args):
     _setup_main(monkeypatch, tmp_path)
-    monkeypatch.setattr(run.sys, "argv", ["run"])
+    run.save_state({"scan_targets": {}, "judgments": {}, "model": "trial-model"})
+    tallies = []
+    monkeypatch.setattr(run, "phase_tally", lambda s: tallies.append(run.generate_tally(s)))
+    monkeypatch.setattr(run.sys, "argv", ["run", *args])
     run.main()
+    assert tallies[0]["model"] == "trial-model"
+    assert run.load_state()["model"] == "trial-model"
 
 
 def test_main_tally_only(monkeypatch, tmp_path):

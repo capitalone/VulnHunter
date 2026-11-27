@@ -399,6 +399,27 @@ allowed_tools = ["Read", "Edit"]
         cfg = load_config(path)
         assert cfg.scan.allowed_tools == ["Read", "Edit"]
 
+    def test_verify_token_path_prefixes_parse(self, tmp_path: Path) -> None:
+        """token_path_prefixes parses to a tuple, stripping each entry and
+        dropping blank/whitespace-only entries (confused-deputy guard config).
+        """
+        path = tmp_path / "cfg.toml"
+        path.write_text(
+            """
+[anthropic]
+bedrock_base_url = "https://b"
+model = "m"
+[oauth]
+token_endpoint = "https://o"
+client_id = "x"
+client_secret = "y"
+[verify]
+token_path_prefixes = [" acme ", "   ", "acme/widgets"]
+"""
+        )
+        cfg = load_config(path)
+        assert cfg.verify.token_path_prefixes == ("acme", "acme/widgets")
+
     def test_load_minimal_fixture(self) -> None:
         """Smoke test against tests/fixtures/config_minimal.toml."""
         path = Path(__file__).parent / "fixtures" / "config_minimal.toml"
@@ -625,3 +646,22 @@ retries = false
         cfg = load_config(path)
         assert cfg.logging.per_turn_usage is True
         assert cfg.logging.retries is False
+
+
+class TestModuleImportable:
+    """Regression: the agent.config module must parse and expose load_config.
+
+    A prior syntax error (an unclosed VerifyConfig(token_path_prefixes=...)
+    generator) prevented the whole agent package from importing.
+    """
+
+    def test_agent_config_imports(self) -> None:
+        import importlib
+
+        module = importlib.import_module("agent.config")
+        assert module is not None
+
+    def test_load_config_is_callable(self) -> None:
+        import agent.config
+
+        assert callable(agent.config.load_config)
