@@ -46,10 +46,10 @@ cp agent/config.example.toml agent/config.toml   # then edit, or use env vars
 ```bash
 # Direct Anthropic API (default): export your key, then scan.
 export ANTHROPIC_API_KEY=sk-...
-python -m agent https://github.com/your-org/your-service
+python -m agent --mode=scan https://github.com/your-org/your-service
 
 # Scan only, no publish/issues:
-python -m agent https://github.com/your-org/your-service --no-publish --no-issues
+python -m agent --mode=scan https://github.com/your-org/your-service --no-publish --no-issues
 ```
 
 ## Configuration
