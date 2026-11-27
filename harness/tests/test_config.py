@@ -1,5 +1,6 @@
 """Tests for local_harness.config — module-level constants."""
 
+import importlib
 import os
 
 import pytest
@@ -22,6 +23,62 @@ def test_retry_and_timeout_constants():
     assert config.SCAN_RETRY_BACKOFF_MULTIPLIER == 2.0
     assert config.JUDGE_MAX_RETRIES == 3
     assert isinstance(config.MODEL, str) and config.MODEL
+
+
+@pytest.fixture
+def reloaded_with():
+    """Reload `config` with VULNHUNT_HARNESS_MODEL set to a chosen value.
+
+    The two reloads have to bracket the patch correctly: the first must see the
+    patched environment, the restoring one must see the *unpatched* one. Because
+    monkeypatch undoes itself in fixture teardown — which runs after the test
+    body — a plain `finally: reload()` inside the body would re-read the override
+    and leave it baked into config.MODEL for every test that runs afterwards.
+    Undoing explicitly before the restoring reload is what keeps this contained.
+    """
+    mp = pytest.MonkeyPatch()
+
+    def _reload(value):
+        if value is None:
+            mp.delenv("VULNHUNT_HARNESS_MODEL", raising=False)
+        else:
+            mp.setenv("VULNHUNT_HARNESS_MODEL", value)
+        importlib.reload(config)
+        return config
+
+    yield _reload
+
+    mp.undo()
+    importlib.reload(config)
+
+
+def test_model_defaults_without_env_var(reloaded_with):
+    assert reloaded_with(None).MODEL == "claude-opus-4-8"
+
+
+def test_model_env_var_overrides_default(reloaded_with):
+    assert reloaded_with("test-model-x").MODEL == "test-model-x"
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_model_env_var_is_treated_as_unset(reloaded_with, blank):
+    # os.environ.get() falls back only on an *absent* key, so without the guard
+    # an exported-but-empty value reaches the CLI as `claude --model ""`.
+    assert reloaded_with(blank).MODEL == config.DEFAULT_MODEL
+
+
+def test_model_env_var_is_stripped(reloaded_with):
+    assert reloaded_with("  test-model-x  ").MODEL == "test-model-x"
+
+
+@pytest.mark.skipif(
+    os.environ.get("VULNHUNT_HARNESS_MODEL", "").strip() != "",
+    reason="VULNHUNT_HARNESS_MODEL is set in this environment",
+)
+def test_model_override_does_not_leak_between_tests():
+    # Regression guard for the fixture above: if the restoring reload ran while
+    # the env was still patched, this would see the override, not the default.
+    assert config.MODEL == config.DEFAULT_MODEL
 
 
 def test_batch_and_history_paths():
