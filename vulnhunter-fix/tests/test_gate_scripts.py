@@ -118,6 +118,43 @@ def test_sev_homoglyph_obfuscation_flagged(sev, tmp_path, capsys):
     assert "severity mask violation" in capsys.readouterr().err
 
 
+# The S5 homoglyph fold covered the leading 'c' and a few letters, but the
+# map omitted confusables for other letters IN the word "critical" — so a
+# look-alike on 't', 'l', or 'r' still slipped a masked severity through.
+# Per severity-mask-rule.md and the docstring above ("Common confusables for
+# the letters in 'critical' must fold"), every letter must be covered. Words
+# are built from code points so no literal homoglyph sits in this source.
+_NONCOVERED_HOMOGLYPHS = {
+    "cyrillic_te_for_t": ("critical", 3, 0x0442),             # CYRILLIC SMALL LETTER TE ~ 't'
+    "cyrillic_palochka_for_l": ("critical", 7, 0x04C0),       # CYRILLIC LETTER PALOCHKA ~ 'l'
+    "cyrillic_small_palochka_for_l": ("critical", 7, 0x04CF), # CYRILLIC SMALL LETTER PALOCHKA ~ 'l'
+    "small_capital_r_for_r": ("critical", 1, 0x0280),         # LATIN LETTER SMALL CAPITAL R ~ 'r'
+    # CRITICAL_RE is case-insensitive, so the uppercase spelling is equally in
+    # scope: the capital look-alikes must fold too.
+    "cyrillic_capital_te_for_T": ("CRITICAL", 3, 0x0422),     # CYRILLIC CAPITAL LETTER TE ~ 'T'
+    "greek_capital_tau_for_T": ("CRITICAL", 3, 0x03A4),       # GREEK CAPITAL LETTER TAU ~ 'T'
+    "greek_capital_alpha_for_A": ("CRITICAL", 6, 0x0391),     # GREEK CAPITAL LETTER ALPHA ~ 'A'
+}
+
+
+@pytest.mark.parametrize(
+    "word,index,codepoint",
+    list(_NONCOVERED_HOMOGLYPHS.values()),
+    ids=list(_NONCOVERED_HOMOGLYPHS),
+)
+def test_sev_homoglyph_noncovered_letter_flagged(sev, tmp_path, capsys, word, index, codepoint):
+    """Every letter of 'critical', in both cases, not just the leading 'c',
+    must fold. A Cyrillic/Greek/Latin look-alike on 't', 'l', 'r' or 'a'
+    previously passed the gate."""
+    chars = list(word)
+    chars[index] = chr(codepoint)
+    spoofed = "".join(chars)
+    body = tmp_path / "body.md"
+    body.write_text(f"This is a {spoofed} vulnerability.\n", encoding="utf-8")
+    assert sev.main(["check-severity-mask.py", str(body)]) == 1
+    assert "severity mask violation" in capsys.readouterr().err
+
+
 def test_sev_safe_phrase_criticism(sev, tmp_path):
     body = tmp_path / "body.md"
     body.write_text("Received constructive criticism.\n", encoding="utf-8")
