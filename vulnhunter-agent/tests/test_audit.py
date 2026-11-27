@@ -196,6 +196,9 @@ class TestAuditWriter:
             "auth_mode": "bedrock_oauth",
             "vulnfix_key": "abcdef0123456789",
             "client_id": "cid",
+            # Identifier, not a secret: the suffix-not-substring rule must
+            # keep it even though it contains "access_key".
+            "access_key_id": "AKIAEXAMPLE",
         }
         w = _writer(tmp_path)
         w.emit_audit({"event_id": "x", **fields})
@@ -248,6 +251,18 @@ class TestAuditWriter:
     )
     def test_extended_sensitive_key_shapes_masked(self, key: str) -> None:
         assert _clean({key: "SECRET-T"}) == {key: "***"}
+
+    def test_nested_dict_under_sensitive_key_judged_by_inner_keys(self) -> None:
+        # Documented limitation (see _mask_sensitive): a dict under a
+        # credential-named key is walked by its inner key names, so a
+        # benign-named inner key is NOT masked while a credential-named one
+        # is. Pinned both ways so a change in either direction is deliberate.
+        assert _clean({"client_secret": {"value": "PLAIN-VALUE"}}) == {
+            "client_secret": {"value": "PLAIN-VALUE"}
+        }
+        assert _clean({"client_secret": {"refresh_token": "SECRET-U"}}) == {
+            "client_secret": {"refresh_token": "***"}
+        }
 
     def test_non_string_key_not_treated_as_sensitive(self) -> None:
         # Non-str keys can't name a credential; they must not crash the check.

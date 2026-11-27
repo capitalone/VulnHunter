@@ -375,6 +375,7 @@ _SENSITIVE_KEY_SUBSTRINGS = ("privatekey",)
 
 
 def _is_sensitive_key(key: Any) -> bool:
+    """True if ``key`` names a credential field, by normalized exact/suffix/substring match."""
     if not isinstance(key, str):
         return False
     norm = key.lower().replace("_", "").replace("-", "")
@@ -392,9 +393,16 @@ def _mask_sensitive(value: Any) -> Any:
     element-wise (``{"Set-Cookie": ["sid=…", …]}``); dicts are walked by
     ``_clean`` so their own keys decide. Empty values and other scalars
     (ints, bools) pass through, so an unset secret still reads as unset.
+
+    Invariant for callers: a dict value is judged by its *inner* key names
+    only. A secret nested under a non-credential-named inner key, e.g.
+    ``{"client_secret": {"value": "x"}}``, passes through unmasked except
+    for shape-based ``redact()``. Builders must put bare secrets directly
+    under a credential-named key (pinned in
+    ``test_nested_dict_under_sensitive_key_judged_by_inner_keys``).
     """
     if isinstance(value, (str, bytes, bytearray)):
-        return "***" if value else _clean(value)
+        return "***" if value else value
     if isinstance(value, (list, tuple)):
         return [_mask_sensitive(v) for v in value]
     return _clean(value)
