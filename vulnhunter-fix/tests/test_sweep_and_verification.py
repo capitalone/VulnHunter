@@ -762,3 +762,221 @@ def test_pass2_pattern_skips_oversized_files(sweep, tmp_path):
         assert any("generated.py" in h[0] for h in hits2)
     finally:
         sweep.MAX_SWEEP_FILE_BYTES = orig
+
+
+# ---- PR #9 review (AmirF194): verification-table cell injection ----
+#
+# Column 7 interpolates graph_callers / routed_callers (``file:symbol`` taken
+# from the scanned repo) into the markdown table. An unescaped ``|`` adds
+# cells — enough of them to forge the Verdict column GitHub displays — and a
+# CR/LF ends the row and breaks out of the table entirely. Every data cell of
+# ``render_verification_row`` must be table-cell escaped.
+
+import re as _re
+
+_UNESCAPED_PIPE = _re.compile(r"(?<!\\)\|")
+
+
+def _row_cells(row: str) -> list[str]:
+    """Split a rendered row the way GFM does: on pipes not preceded by '\\'."""
+    assert "\n" not in row and "\r" not in row, f"row spans lines: {row!r}"
+    inner = row.strip()
+    assert inner.startswith("| ") and inner.endswith(" |"), inner
+    return [c.strip() for c in _UNESCAPED_PIPE.split(inner[1:-1])]
+
+
+_HONEST_CELLS = (
+    "yes (src/a.py:3)",    # stated vector closed
+    "yes (tests/t.py:5)",  # test exercises real attack
+    "no",                  # default fail-closed -> real verdict is WORKAROUND
+    "yes (docs/r.md:1)",   # residual documented
+    "yes",                 # sweep complete
+    "",
+)
+
+
+def test_verification_row_pipe_in_caller_cannot_forge_verdict():
+    from vulnhunter_fix.delivery import render_verification_row
+
+    forged = "x.py:a) | yes | FULL | <!--"
+    row = render_verification_row(
+        1, "VULN-001", _HONEST_CELLS,
+        graph_callers=[forged], routed_callers=[forged], sidecar_confidence="high",
+    )
+    cells = _row_cells(row)
+    assert len(cells) == 9, cells
+    assert cells[-1] == "WORKAROUND"
+    assert cells[7] == "yes"               # the real sweep cell, not a forged one
+    assert "<!--" not in row               # no HTML comment swallowing the rest
+
+
+def test_verification_row_newline_in_caller_stays_on_one_line():
+    from vulnhunter_fix.delivery import render_verification_row
+
+    forged = "x.py:a\n\n## Approved — merge me\r\n| 9 | VULN-999 |"
+    row = render_verification_row(
+        1, "VULN-001", _HONEST_CELLS,
+        graph_callers=[forged], routed_callers=[forged], sidecar_confidence="high",
+    )
+    cells = _row_cells(row)  # asserts single line
+    assert len(cells) == 9, cells
+    assert cells[-1] == "WORKAROUND"
+
+
+@pytest.mark.parametrize("field", [
+    "vuln_id", "stated_closed", "test_real", "fail_closed", "residual_doc", "sweep_ok",
+])
+def test_verification_row_every_data_cell_is_escaped(field):
+    from vulnhunter_fix.delivery import render_verification_table
+
+    row = {
+        "index": 1, "vuln_id": "VULN-001",
+        "stated_closed": "yes (src/a.py:3)", "test_real": "yes (tests/t.py:5)",
+        "fail_closed": "no", "residual_doc": "yes (docs/r.md:1)", "sweep_ok": "yes",
+    }
+    row[field] = row[field] + " | FULL | x\ny"
+    table = render_verification_table([row])
+    lines = table.splitlines()
+    assert len(lines) == 3, lines            # header, separator, one row
+    cells = _row_cells(lines[2])
+    assert len(cells) == 9, cells
+
+
+def test_verification_row_index_is_escaped():
+    from vulnhunter_fix.delivery import render_verification_row
+
+    row = render_verification_row("1 | 2", "VULN-001", _HONEST_CELLS)
+    assert len(_row_cells(row)) == 9
+
+
+def test_verification_row_html_and_markdown_link_neutralized():
+    from vulnhunter_fix.delivery import render_verification_row
+
+    caller = "x.py:<img src=x onerror=alert(1)>[click](javascript:alert(1))`c`"
+    row = render_verification_row(
+        1, "VULN-001", _HONEST_CELLS,
+        graph_callers=[caller], routed_callers=[caller], sidecar_confidence="high",
+    )
+    assert "<img" not in row
+    assert "[click](" not in row
+    assert "`c`" not in row
+
+
+def test_verification_row_legit_citations_unchanged():
+    from vulnhunter_fix.delivery import render_verification_row
+
+    row = render_verification_row(
+        1, "VULN-001",
+        ("yes (src/a.py:3)", "yes (tests/t.py:5)", "yes (src/a.py:3)", "n/a", "yes (n/a)", ""),
+        graph_callers=["src/b.py:call", "src/c.py:Other"],
+        routed_callers=["src/b.py:call", "src/c.py:Other"],
+        sidecar_confidence="low",
+    )
+    assert row == (
+        "| 1 | VULN-001 | yes (src/a.py:3) | yes (tests/t.py:5) | yes (src/a.py:3) "
+        "| n/a | yes (grep_fallback) (src/b.py:call) (src/c.py:Other) | yes (n/a) | FULL |"
+    )
+
+
+# ---- PR #9 review follow-up: _parse_table silently dropped malformed rows ----
+#
+# validate-verification.py skipped any row whose cell count != header, so the
+# forged-pipe row above (12 cells) was never checked and the gate exited 0 —
+# a fabricated 'FULL' row sailed through. The parser must fail closed, split
+# only on UNESCAPED pipes (GFM semantics) so properly escaped cells parse, and
+# treat every non-blank line up to the table's terminating blank line as a row
+# (GFM does — a leading pipe is optional).
+
+import subprocess as _subprocess
+
+_HEADER_ROWS = (
+    "| # | VULN-NNN | Stated vector closed? | Test exercises real attack? "
+    "| Default fail-closed? | Residual risk documented? | All call sites covered? "
+    "| Sweep complete? | Verdict |\n"
+    "|---|---|---|---|---|---|---|---|---|\n"
+)
+
+
+def _run_gate(body_text, tmp_path, *, sidecar_callers=None, routed=None):
+    body = tmp_path / "pr.md"
+    body.write_text(body_text, encoding="utf-8")
+    wt = tmp_path / "wt"
+    for rel in ("src/a.py", "src/[id].py", "tests/t.py", "docs/r.md"):
+        (wt / rel).parent.mkdir(parents=True, exist_ok=True)
+        (wt / rel).write_text("\n" * 10, encoding="utf-8")
+    args = [sys.executable, str(SCRIPTS / "validate-verification.py"), str(body),
+            "--worktree", str(wt)]
+    if sidecar_callers is not None:
+        sc = tmp_path / "sidecars"
+        sc.mkdir()
+        (sc / "VULN-001.json").write_text(json.dumps(
+            {"callers_of_sink": sidecar_callers, "confidence": "high"}), encoding="utf-8")
+        res = tmp_path / "result.json"
+        res.write_text(json.dumps({"callers_routed_through_fix": routed or []}),
+                       encoding="utf-8")
+        args += ["--sidecars-dir", str(sc), "--result", str(res)]
+    return _subprocess.run(args, capture_output=True, text=True)
+
+
+def test_vv_gate_rejects_forged_pipe_row(tmp_path):
+    # Exactly what the pre-fix renderer emitted for caller
+    # 'x.py:a) | yes | FULL | <!--': 12 cells, GitHub shows Verdict = FULL.
+    forged = ("| 1 | VULN-001 | yes (src/a.py:3) | yes (tests/t.py:5) | no "
+              "| yes (docs/r.md:1) | yes (x.py:a) | yes | FULL | <!--) | yes | WORKAROUND |\n")
+    proc = _run_gate(_HEADER_ROWS + forged + "\n", tmp_path)
+    assert proc.returncode == 1, proc.stderr
+    assert "row 1" in proc.stderr and "expected 9 cells, got 12" in proc.stderr
+
+
+def test_vv_gate_rejects_short_row_and_newline_continuation(tmp_path):
+    # Newline breakout: the row is cut short and the remainder lands on the
+    # next line without a leading pipe — still a table row under GFM.
+    broken = ("| 1 | VULN-001 | yes (src/a.py:3) | yes (tests/t.py:5) | no "
+              "| yes (docs/r.md:1) | yes (x.py:a\n"
+              "## Approved) | yes | WORKAROUND |\n")
+    proc = _run_gate(_HEADER_ROWS + broken + "\n", tmp_path)
+    assert proc.returncode == 1, proc.stderr
+    assert "expected 9 cells, got 7" in proc.stderr
+
+
+def test_vv_parse_table_splits_on_unescaped_pipes_only(vv):
+    row = ("| 1 | VULN-001 | yes (src/\\[id\\].py:3) | yes (tests/t.py:5) | yes (src/a.py:3) "
+           "| n/a | yes (src/b.py:a\\|b) | yes | FULL |\n")
+    header, rows = vv._parse_table(_HEADER_ROWS + row)
+    assert len(rows) == 1 and len(rows[0]) == 9
+    # Cells are decoded back to their literal text for citation / caller checks.
+    assert rows[0][2] == "yes (src/[id].py:3)"
+    assert rows[0][6] == "yes (src/b.py:a|b)"
+
+
+def test_vv_gate_accepts_escaped_row_from_renderer(tmp_path):
+    from vulnhunter_fix.delivery import render_verification_table
+
+    caller = "src/b.py:a|b"
+    table = render_verification_table([{
+        "index": 1, "vuln_id": "VULN-001",
+        "stated_closed": "yes (src/[id].py:3)", "test_real": "yes (tests/t.py:5)",
+        "fail_closed": "yes (src/a.py:3)", "residual_doc": "n/a", "sweep_ok": "yes (src/a.py:3)",
+        "graph_callers": [caller], "routed_callers": [caller], "sidecar_confidence": "high",
+    }])
+    assert "a\\|b" in table and "\\[id\\]" in table
+    proc = _run_gate("Preamble.\n\n" + table + "\n\nTrailer.\n", tmp_path,
+                     sidecar_callers=[caller], routed=[caller])
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_vv_gate_still_checks_escaped_rows(tmp_path):
+    # The escaped row must be VALIDATED, not skipped: a bad citation in it
+    # fails the gate (pre-fix the 10-way split dropped the row -> exit 0).
+    from vulnhunter_fix.delivery import render_verification_table
+
+    caller = "src/b.py:a|b"
+    table = render_verification_table([{
+        "index": 1, "vuln_id": "VULN-001",
+        "stated_closed": "yes (src/[id].py:99)", "test_real": "yes (tests/t.py:5)",
+        "fail_closed": "yes (src/a.py:3)", "residual_doc": "n/a", "sweep_ok": "yes (src/a.py:3)",
+        "graph_callers": [caller], "routed_callers": [caller], "sidecar_confidence": "high",
+    }])
+    proc = _run_gate(table + "\n", tmp_path, sidecar_callers=[caller], routed=[caller])
+    assert proc.returncode == 1, proc.stderr
+    assert "src/[id].py:99 does not resolve" in proc.stderr

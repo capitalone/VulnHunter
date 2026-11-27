@@ -1,12 +1,17 @@
 """Tests for local_harness.benchmark.analyze_misses."""
 
 import json
+import os
 import subprocess
 import types
+from pathlib import Path
 
 import pytest
 
 import local_harness.benchmark.analyze_misses as am
+
+# Top of the repository: harness/tests/ -> harness/ -> repository root.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _proc(returncode=0, stdout="", stderr=""):
@@ -171,6 +176,40 @@ def test_invoke_diagnostic_no_bash(monkeypatch):
     assert cmd[cmd.index("--setting-sources") + 1] == "user"
     assert "--strict-mcp-config" in cmd
     assert "--allowedTools" not in cmd
+
+
+def test_phase_prompt_files_exist():
+    """Every prompt file named for a loss phase exists in the repository."""
+    missing = [
+        prompt_file
+        for prompt_files in am.PHASE_TO_PROMPT.values()
+        for prompt_file in prompt_files
+        if not (REPOSITORY_ROOT / prompt_file).is_file()
+    ]
+    assert not missing, missing
+
+
+def test_invoke_diagnostic_add_dirs_exist(monkeypatch, tmp_path):
+    """The session can only read inside its --add-dir roots, and claude accepts
+    a missing --add-dir without an error, so every root must exist.
+    """
+    captured = {}
+
+    def fake_run(cmd, *a, **k):
+        captured["cmd"] = cmd
+        return _proc(0, stdout='{"root_cause":"rc"}')
+
+    monkeypatch.setattr(am.subprocess, "run", fake_run)
+    results_dir = tmp_path / "rd"
+    repo_dir = tmp_path / "repo"
+    results_dir.mkdir()
+    repo_dir.mkdir()
+    finding = {"finding_id": "F1", "type": "SQLi", "description": "d", "repo_name": "r"}
+    am.invoke_diagnostic(finding, "phase1", "ev", str(results_dir), str(repo_dir))
+    cmd = captured["cmd"]
+    add_dirs = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "--add-dir"]
+    missing = [d for d in add_dirs if not os.path.isdir(d)]
+    assert not missing, missing
 
 
 def test_invoke_diagnostic_timeout(monkeypatch):

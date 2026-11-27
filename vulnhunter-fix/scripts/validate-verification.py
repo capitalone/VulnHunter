@@ -28,6 +28,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 import sys
@@ -53,7 +54,43 @@ CELL_NO = re.compile(r"^\s*no\s*$", re.IGNORECASE)
 CELL_NA = re.compile(r"^\s*n\s*/\s*a\s*$", re.IGNORECASE)
 
 
+# GFM splits a table row on pipes that are NOT backslash-escaped; ``\|`` is a
+# literal pipe inside a cell. vulnhunter_fix.delivery._escape_table_cell emits
+# exactly that escape, plus backslash-escaped markdown punctuation and
+# html-escaped ``<>&`` — _decode_cell reverses both so citations and callers
+# are checked against their literal text.
+_UNESCAPED_PIPE_RE = re.compile(r"(?<!\\)\|")
+_MD_BACKSLASH_ESCAPE_RE = re.compile(r"\\([!-/:-@\[-`{-~])")
+
+
+class MalformedTableError(ValueError):
+    """A verification-table row does not have exactly the header's cell count."""
+
+
+def _decode_cell(cell: str) -> str:
+    return html.unescape(_MD_BACKSLASH_ESCAPE_RE.sub(r"\1", cell.strip()))
+
+
+def _split_row(line: str) -> list[str]:
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|") and not s.endswith("\\|"):
+        s = s[:-1]
+    return [_decode_cell(c) for c in _UNESCAPED_PIPE_RE.split(s)]
+
+
 def _parse_table(text: str) -> tuple[list[str], list[list[str]]] | None:
+    """Return (header_cells, rows) or None when no verification table exists.
+
+    Fails closed: raises MalformedTableError naming every row whose cell
+    count differs from the header. Previously such rows were silently
+    dropped, so an injected ``|`` (extra cells, forged Verdict) or a CR/LF
+    (short row) removed the row from validation entirely and the gate
+    exited 0 (PR #9 review). Rows run until the first blank line, matching
+    GFM, where a leading pipe is optional — so a newline-broken row's
+    continuation is a row too.
+    """
     lines = text.splitlines()
     header_idx = None
     for i, line in enumerate(lines):
@@ -62,14 +99,23 @@ def _parse_table(text: str) -> tuple[list[str], list[list[str]]] | None:
             break
     if header_idx is None:
         return None
-    header_cells = [c.strip() for c in lines[header_idx].strip("|").split("|")]
+    header_cells = _split_row(lines[header_idx])
     rows = []
-    for line in lines[header_idx + 2:]:
-        if not line.strip().startswith("|"):
+    malformed = []
+    for lineno, line in enumerate(lines[header_idx + 2:], start=header_idx + 3):
+        if not line.strip():
             break
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        if len(cells) == len(header_cells):
-            rows.append(cells)
+        cells = _split_row(line)
+        if len(cells) != len(header_cells):
+            malformed.append(
+                f"row {len(rows) + len(malformed) + 1} (line {lineno}): expected "
+                f"{len(header_cells)} cells, got {len(cells)} — unescaped '|' or "
+                f"line break in a cell? {line.strip()[:160]!r}"
+            )
+            continue
+        rows.append(cells)
+    if malformed:
+        raise MalformedTableError("\n".join(malformed))
     return header_cells, rows
 
 
@@ -237,7 +283,12 @@ def validate(pr_body: Path, worktree: Path, sidecars_dir: Path | None, result_pa
         print(f"{pr_body}: <io>: {exc}", file=sys.stderr)
         return 2
 
-    parsed = _parse_table(text)
+    try:
+        parsed = _parse_table(text)
+    except MalformedTableError as exc:
+        for msg in str(exc).splitlines():
+            print(f"{pr_body}: <table>: {msg}", file=sys.stderr)
+        return 1
     if not parsed:
         print(f"{pr_body}: <table>: 9-column verification table not found", file=sys.stderr)
         return 1

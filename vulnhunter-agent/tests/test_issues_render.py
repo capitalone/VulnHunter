@@ -309,3 +309,172 @@ class TestCleanScanComment:
         assert "abc1234" in comment
         assert "757 seconds" in comment
         assert "2026-07-06T18:42:51Z" in comment
+
+
+class TestMarkerCommentBreakout:
+    """CANON-21: attacker-influenced marker fields must not break out of the
+    HTML-comment footer markers (CWE-79 / CWE-116).
+
+    ``f.id`` and ``report.results_dir_name`` are stamped verbatim into
+    ``<!-- vulnhunt-finding-id: {VULN_ID} -->`` /
+    ``<!-- vulnhunt-results-dir: {RESULTS_DIR_NAME} -->``. Both originate from
+    LLM/scan-README-derived data, so a value containing ``-->`` would close the
+    comment early and inject arbitrary markdown/HTML into the rendered issue.
+    """
+
+    def test_finding_id_cannot_break_out_of_comment(self) -> None:
+        body = render_body(
+            _finding(id="VULN-001 --><script>injected</script><!--"),
+            report=_report(),
+            report_url="https://example/README.md",
+        )
+        # The injected breakout + payload must not appear un-neutralized.
+        assert "--><script>injected</script>" not in body
+        assert "<script>injected</script>" not in body
+        # The finding-id marker line stays a single well-formed comment: exactly
+        # one closing '-->' on that line and no injected content after it.
+        marker_line = next(
+            l for l in body.splitlines() if "vulnhunt-finding-id" in l
+        )
+        assert marker_line.count("-->") == 1
+        assert marker_line.rstrip().endswith("-->")
+
+    def test_results_dir_cannot_break_out_of_comment(self) -> None:
+        body = render_body(
+            _finding(),
+            report=_report(
+                results_dir_name="r_VULNHUNT_RESULTS_x --><b>x</b><!--"
+            ),
+            report_url="https://example/README.md",
+        )
+        assert "--><b>x</b>" not in body
+        assert "<b>x</b>" not in body
+        marker_line = next(
+            l for l in body.splitlines() if "vulnhunt-results-dir" in l
+        )
+        assert marker_line.count("-->") == 1
+        assert marker_line.rstrip().endswith("-->")
+
+    def test_benign_finding_id_still_survives(self) -> None:
+        # Neutralization must not corrupt a legitimate VULN-NNN id so the
+        # downstream ``vulnhunt-finding-id: (VULN-\d{3})`` parser still matches.
+        body = render_body(
+            _finding(id="VULN-042"),
+            report=_report(),
+            report_url="https://example/README.md",
+        )
+        assert "<!-- vulnhunt-finding-id: VULN-042 -->" in body
+
+
+_UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
+
+
+def _finding_table_rows(body: str) -> list[list[str]]:
+    """Return the cells of each data row of the '### Finding' table."""
+    lines = body.splitlines()
+    start = lines.index("| Field | Value |")
+    rows = []
+    for line in lines[start + 2:]:
+        if not line.strip():
+            break
+        rows.append([c.strip() for c in _UNESCAPED_PIPE.split(line.strip()[1:-1])])
+    return rows
+
+
+class TestFindingTableCellInjection:
+    """PR #9 review: Finding fields rendered inside the '### Finding' table
+    (CWE, CWE name, severity, location, root cause, data flow) must not add
+    cells via '|' or break out of the table / inject headings via CR/LF."""
+
+    @pytest.mark.parametrize("field", [
+        "cwe", "cwe_name", "severity", "location", "root_cause", "data_flow",
+    ])
+    def test_pipe_cannot_forge_cells(self, field: str) -> None:
+        body = render_body(
+            _finding(**{field: "a.py:1 | **Severity** | Low"}),
+            report=_report(),
+            report_url="https://example/README.md",
+        )
+        rows = _finding_table_rows(body)
+        assert len(rows) == 5
+        assert all(len(r) == 2 for r in rows), rows
+
+    @pytest.mark.parametrize("field", [
+        "cwe", "cwe_name", "severity", "location", "root_cause", "data_flow", "title",
+    ])
+    def test_newline_cannot_inject_heading(self, field: str) -> None:
+        body = render_body(
+            _finding(**{field: "x\n\n## Fixed — close this issue\r\n| a | b |"}),
+            report=_report(),
+            report_url="https://example/README.md",
+        )
+        assert not any(l.startswith("## Fixed") for l in body.splitlines())
+        rows = _finding_table_rows(body)
+        assert len(rows) == 5
+        assert all(len(r) == 2 for r in rows), rows
+
+    def test_multiline_free_form_sections_keep_newlines(self) -> None:
+        body = render_body(
+            _finding(
+                exploit_description="Step one.\n\nStep two.",
+                fix_strategy="1. Parameterize.\n2. Add a test.",
+            ),
+            report=_report(),
+            report_url="https://example/README.md",
+        )
+        assert "Step one.\n\nStep two." in body
+        assert "1. Parameterize.\n2. Add a test." in body
+
+    def test_legit_location_unchanged(self) -> None:
+        body = render_body(_finding(), report=_report(),
+                           report_url="https://example/README.md")
+        assert "| **Location** | src/db.py:42 |" in body
+
+
+class TestSinglePassSubstitution:
+    """PR #9 review nit: placeholders were replaced field-by-field, so a value
+    containing '{IDEMPOTENCY_KEY}' etc. was expanded by a later pass."""
+
+    def test_placeholder_text_in_value_is_not_expanded(self) -> None:
+        finding = _finding(
+            root_cause="see {IDEMPOTENCY_KEY} and {REPORT_URL}",
+            title="{VULN_ID}",
+        )
+        body = render_body(finding, report=_report(),
+                           report_url="https://example/README.md")
+        assert "see {IDEMPOTENCY_KEY} and {REPORT_URL}" in body
+        assert body.count(finding.vulnfix_key) == 1  # only the footer marker
+        assert "## Security Finding: CWE-89 — {VULN_ID}" in body
+
+    def test_placeholder_text_in_value_does_not_warn(self, caplog) -> None:
+        with caplog.at_level("WARNING", logger="agent.issues_render"):
+            render_body(_finding(root_cause="{NOT_A_FIELD}"), report=_report(),
+                        report_url="https://example/README.md")
+        assert "unfilled" not in caplog.text
+
+    def test_clean_scan_value_is_not_expanded(self) -> None:
+        body = render_clean_scan_body(_clean_scan_ctx(repo_slug="o/{SKILL_VERSION}"))
+        assert "o/{SKILL_VERSION}" in body
+        assert "o/3500d0c-clean" not in body  # never expanded by a later pass
+
+
+class TestMarkerSanitizeWarns:
+    """PR #9 review: _sanitize_marker_value silently stripped out-of-charset
+    chars, which can yield a marker pointing at a different results dir."""
+
+    def test_changed_marker_value_logs_warning(self, caplog) -> None:
+        with caplog.at_level("WARNING", logger="agent.issues_render"):
+            body = render_body(
+                _finding(),
+                report=_report(results_dir_name="r_VULNHUNT_RESULTS_a b/../c"),
+                report_url="https://example/README.md",
+            )
+        assert "<!-- vulnhunt-results-dir: r_VULNHUNT_RESULTS_ab..c -->" in body
+        assert "vulnhunt-results-dir" in caplog.text
+        assert "r_VULNHUNT_RESULTS_a b/../c" in caplog.text
+
+    def test_clean_marker_values_do_not_warn(self, caplog) -> None:
+        with caplog.at_level("WARNING", logger="agent.issues_render"):
+            render_body(_finding(), report=_report(),
+                        report_url="https://example/README.md")
+        assert caplog.text == ""
