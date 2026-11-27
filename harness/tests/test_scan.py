@@ -6,6 +6,7 @@ import types
 
 import pytest
 
+import local_harness.batch.utils as utils
 import local_harness.scan as scan
 
 # Captured before the autouse stub below replaces it, for the tests that
@@ -324,6 +325,8 @@ def _capture_scan_argv(monkeypatch, tmp_path, **scan_kwargs):
 
     def fake_popen(cmd, *a, **k):
         captured["argv"] = cmd
+        # The results dir named in the prompt must exist when claude is launched.
+        assert os.path.isdir(_prompt_results_dir(cmd[2]))
         return _FakePopen([json.dumps({"type": "result"}) + "\n"], returncode=0)
     monkeypatch.setattr(scan.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(scan.threading, "Timer", _NoTimer)
@@ -399,7 +402,8 @@ def test_scan_folder_prompt_has_preresolved_metadata(monkeypatch, tmp_path, read
     prompt = argv[2]
     assert "Pre-resolved scan metadata" in prompt
     results_dir = _prompt_results_dir(prompt)
-    assert os.path.isdir(results_dir)
+    # _capture_scan_argv checks that the dir exists when claude is launched;
+    # a dir the scan left empty is removed once the scan has finished.
     assert os.path.basename(results_dir).startswith("repo_VULNHUNT_RESULTS_")
     assert "- VULNHUNT_BRANCH: main [abc1234]" in prompt
     assert "- Repository URL: https://github.com/o/r" in prompt
@@ -411,6 +415,39 @@ def test_scan_folder_results_dir_none_when_scan_wrote_nothing(monkeypatch, tmp_p
     folder.mkdir()
     result = _run_fake_scan(monkeypatch, tmp_path, folder)
     assert result.results_dir is None
+
+
+def test_scan_folder_removes_empty_results_dir(monkeypatch, tmp_path):
+    folder = tmp_path / "repo"
+    folder.mkdir()
+    _run_fake_scan(monkeypatch, tmp_path, folder)
+    assert [e for e in os.listdir(folder) if "_VULNHUNT_RESULTS_" in e] == []
+
+
+def test_scan_folder_tolerates_failure_to_remove_empty_results_dir(monkeypatch, tmp_path):
+    folder = tmp_path / "repo"
+    folder.mkdir()
+
+    def fail_rmdir(path):
+        raise PermissionError(path)
+    monkeypatch.setattr(scan.os, "rmdir", fail_rmdir)
+
+    result = _run_fake_scan(monkeypatch, tmp_path, folder)
+
+    assert result.results_dir is None
+
+
+def test_failed_scan_is_reported_missing_by_collect_results(monkeypatch, tmp_path):
+    # An empty results dir left by a scan that wrote nothing used to be copied
+    # to the upload dir and counted as a result.
+    base = tmp_path / "clones"
+    folder = base / "owner__repo"
+    folder.mkdir(parents=True)
+    _run_fake_scan(monkeypatch, tmp_path, folder)
+
+    out = utils.collect_results(clone_base=str(base), upload_dir=str(tmp_path / "up"))
+
+    assert out == {"copied": [], "missing": ["owner__repo"]}
 
 
 def test_create_results_dir_refuses_existing(monkeypatch, tmp_path):
