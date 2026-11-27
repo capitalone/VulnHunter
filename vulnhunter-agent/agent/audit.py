@@ -353,14 +353,74 @@ def _serialize(record: dict[str, Any]) -> str:
     return json.dumps(cleaned, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=False) + "\n"
 
 
+# CWE-532: redact() matches secrets by shape (``ghp_…``, ``Bearer …``), so a
+# bare secret under a credential-named key (``{"client_secret": "x"}``) has
+# nothing to match. Keys are normalized (lowercased, ``_``/``-`` dropped) and
+# matched exactly or by suffix, plus one substring (``privatekey``, so
+# ``private_key_pem`` is caught). Matching is never by a generic substring, so
+# usage fields such as ``input_tokens`` / ``token_endpoint`` / ``vulnfix_key``
+# are left alone. Accepted false positives: any string under a key ending in
+# e.g. ``token`` or ``secret`` is masked — including operator-named
+# ``repo_properties`` fields or a future ``next_page_token`` — so avoid such
+# names for non-secret audit metadata.
+_SENSITIVE_KEY_NAMES = frozenset(
+    {"authorization", "proxyauthorization", "cookie", "setcookie"}
+)
+_SENSITIVE_KEY_SUFFIXES = (
+    "secret", "secrets", "password", "passwords", "passwd", "passphrase",
+    "token", "apikey", "apikeys", "secretkey", "accesskey",
+    "credential", "credentials",
+)
+_SENSITIVE_KEY_SUBSTRINGS = ("privatekey",)
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    """True if ``key`` names a credential field, by normalized exact/suffix/substring match."""
+    if not isinstance(key, str):
+        return False
+    norm = key.lower().replace("_", "").replace("-", "")
+    return (
+        norm in _SENSITIVE_KEY_NAMES
+        or norm.endswith(_SENSITIVE_KEY_SUFFIXES)
+        or any(sub in norm for sub in _SENSITIVE_KEY_SUBSTRINGS)
+    )
+
+
+def _mask_sensitive(value: Any) -> Any:
+    """Mask a value found under a credential-named key.
+
+    Non-empty strings and bytes become ``***``; lists/tuples are masked
+    element-wise (``{"Set-Cookie": ["sid=…", …]}``); dicts are walked by
+    ``_clean`` so their own keys decide. Empty values and other scalars
+    (ints, bools) pass through, so an unset secret still reads as unset.
+
+    Invariant for callers: a dict value is judged by its *inner* key names
+    only. A secret nested under a non-credential-named inner key, e.g.
+    ``{"client_secret": {"value": "x"}}``, passes through unmasked except
+    for shape-based ``redact()``. Builders must put bare secrets directly
+    under a credential-named key (pinned in
+    ``test_nested_dict_under_sensitive_key_judged_by_inner_keys``).
+    """
+    if isinstance(value, (str, bytes, bytearray)):
+        return "***" if value else value
+    if isinstance(value, (list, tuple)):
+        return [_mask_sensitive(v) for v in value]
+    return _clean(value)
+
+
 def _clean(value: Any) -> Any:
-    """Recursively drop keys with None values and redact strings."""
+    """Recursively drop keys with None values and redact strings.
+
+    Values under credential-named keys are masked outright (see
+    ``_mask_sensitive``), since pattern-based redaction can't recognize a
+    bare secret value.
+    """
     if isinstance(value, dict):
         out: dict[str, Any] = {}
         for k, v in value.items():
             if v is None:
                 continue
-            out[k] = _clean(v)
+            out[k] = _mask_sensitive(v) if _is_sensitive_key(k) else _clean(v)
         return out
     if isinstance(value, (list, tuple)):
         return [_clean(v) for v in value]
