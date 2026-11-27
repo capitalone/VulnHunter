@@ -18,7 +18,19 @@ MAX_SCAN_WORKERS = 5
 SCAN_TIMEOUT = 21600  # 6 hours
 JUDGE_TIMEOUT = 600  # 10 minutes (batched judging can be larger)
 CLONE_TIMEOUT = 300  # 5 minutes
-MODEL = "claude-opus-4-8"
+# The scanning/judging model. VULNHUNT_HARNESS_MODEL overrides it for a single
+# run without editing this file — scoped to the harness the way the agent's
+# VULNHUNT_AGENT_CONFIG is scoped to the agent, so it stays clear of the agent's
+# VULNHUNT_<SECTION>_<KEY> namespace (a shared name would not work anyway:
+# VULNHUNT_ANTHROPIC_MODEL may hold a Bedrock inference-profile ID, which the
+# `claude --model` flag we shell out to does not accept).
+#
+# Blank is treated as unset: os.environ.get() falls back only on an *absent*
+# key, so an exported-but-empty value would otherwise reach the CLI as
+# `claude --model ""`. Read once at import, so it must be set before the process
+# starts.
+DEFAULT_MODEL = "claude-opus-4-8"
+MODEL = os.environ.get("VULNHUNT_HARNESS_MODEL", "").strip() or DEFAULT_MODEL
 
 # --- Retry configuration for 429 rate limiting ---
 SCAN_MAX_RETRIES = 3

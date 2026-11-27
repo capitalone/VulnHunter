@@ -8,7 +8,19 @@ owner-only regardless of umask, and its parent dir owner-only.
 import os
 import stat
 
+import pytest
+
 from agent.audit import _open_append
+
+
+@pytest.fixture(autouse=True)
+def _restore_umask():
+    # The tests below force umask 022; restore the caller's umask so it doesn't
+    # leak into whatever test runs next in the same process.
+    old = os.umask(0o022)
+    os.umask(old)
+    yield
+    os.umask(old)
 
 
 def test_audit_file_is_owner_only(tmp_path):
