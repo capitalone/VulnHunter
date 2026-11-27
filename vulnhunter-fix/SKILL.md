@@ -104,9 +104,9 @@ Check your own model identity from your session system prompt (it says "You are 
 
 | You are | Action |
 |---------|--------|
-| Opus 4.x (any variant) | Proceed to Step 1. |
-| Sonnet 4.x | **Stop.** Tell the user, verbatim: `This skill is calibrated for Opus. Please run `/model claude-opus-4-8` and then re-invoke `/vulnhunter-fix`.` Do not run any other tool calls. |
-| Haiku 4.x | **Stop.** Same message as above. |
+| Opus (any version) | Proceed to Step 1. |
+| Sonnet (any version) | **Stop.** Tell the user, verbatim: `This skill is calibrated for Opus. Please run `/model claude-opus-4-8` and then re-invoke `/vulnhunter-fix`.` Do not run any other tool calls. |
+| Haiku (any version) | **Stop.** Same message as above. |
 
 This is interactive-mode only. Headless mode invokes the executor with a fixed Opus model under the hood and skips this gate.
 
@@ -381,7 +381,7 @@ Settings in `config.json`. Key options:
 - `verification.max_repair_attempts`: Max repair loop iterations in **fork / headless** mode before escalating to human review (default: 3). In-place mode's collaboration loop is uncapped (see `implement.md`).
 - `behavior.fork_visibility`: Visibility for created forks (default: `private`) — fork mode only
 - `behavior.deliver_to_fork_only`: Never create PRs/issues in target repo (default: true) — fork mode only
-- `behavior.confirm_before_push`: Ask before pushing (default: true) — fork mode only
+- `behavior.confirm_before_push`: Ask before pushing (default: false, as shipped in `config.json`) — fork mode only. This is separate from the mandatory phase-boundary Approve/Pause checkpoints, which apply regardless of this setting.
 - `behavior.work_dir`: Local directory for cloning target repo (default: `./work`) — fork mode only
 - `collaborators_file`: Path to collaborators whitelist (default: `collaborators.json`) — fork mode only
 - `verification.max_retries`: Legacy synonym for `max_repair_attempts` referenced by `headless/` docs; not read by the in-place prompts.
