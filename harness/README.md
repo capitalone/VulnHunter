@@ -16,8 +16,27 @@ Requires Python 3.12+ and an authenticated [Claude Code CLI](https://docs.claude
 on PATH — the harness shells out to `claude -p /vulnhunt ...` under the hood. It
 has no other runtime dependencies.
 
-Set the scanning/judging model once in `local_harness/config.py` (the `MODEL`
-constant) to switch models across every workflow.
+Set the scanning/judging model once in `local_harness/config.py` (the
+`DEFAULT_MODEL` constant) to switch models across every workflow, or override it
+for a single run without editing the file:
+
+```bash
+VULNHUNT_HARNESS_MODEL=<model-id> python -m local_harness.batch.run scan
+```
+
+The value is read once at import, so export it before the process starts; a
+blank value is treated as unset. Two things to know before reaching for it:
+
+- `/vulnhunt` is written for Opus-class models and stops with a warning on
+  anything lower (`vulnhunt/SKILL.md`, Step 0). A downgraded run is for
+  exercising the plumbing, not for producing detection numbers.
+- Both resume paths skip targets that already have results, even if the model
+  changes. The benchmark keeps the saved model label when no scan runs,
+  including with `--judge-only` or `--tally-only`. Use `--force-rescan`
+  (benchmark) or a fresh clone (batch) to actually rescan. The benchmark stores
+  one model label for the latest scans, so rescan all targets when switching
+  models to avoid mixing results. A benchmark trial also appends to
+  `finding_history.json`, which is what `--skip-stable` reads.
 
 ## What's inside
 
@@ -41,19 +60,43 @@ python -m local_harness.batch.run status               # check progress
 python -m local_harness.batch.run collect              # gather results into to_upload/
 ```
 
+### Read-only by default
+
+Scanned repos are untrusted, so scans (batch and benchmark) run read-only
+unless you pass `--execute`. The harness pre-creates the
+`<clone>/<clone>_VULNHUNT_RESULTS_<timestamp>` dir and passes it, plus branch
+and origin URL, to the skill. It then runs `claude -p` with:
+
+- `--tools Read,Write,Edit,Grep,Glob,Agent`: no Bash, WebFetch or WebSearch.
+- `--permission-mode default`, where only writes under the results dir are
+  pre-approved. Reads stay inside the clone and the skill dirs. Anything else
+  would need a prompt, which headless mode denies.
+- `--setting-sources user`, so the clone's own `.claude/settings*.json` and its
+  hooks are never loaded.
+- `--strict-mcp-config`, so no MCP servers or claude.ai connectors are loaded.
+
+`--execute` re-grants Bash under `acceptEdits` so the skill can install
+dependencies and run exploit tests. Use it only on code you trust.
+
 ## Benchmarking
 
 Ground truth lives in `local_harness/benchmark/ground_truth/*.json` — one file
 per repo, each finding pinned to a public GitHub URL at a specific commit. The
-repo ships only a synthetic `EXAMPLE.json` mapped to public targets (OWASP Juice
-Shop / WebGoat / NodeGoat); **bring your own corpus** by adding
+repo ships a real starter corpus pinned to specific commits of OWASP Juice
+Shop, WebGoat, and NodeGoat; **bring your own corpus** by adding
 `ground_truth/<repo>.json`.
+
+**Upgrading from a version that predates the starter corpus?** `load_all_benchmarks()`
+globs every `*.json` in `ground_truth/`, so a run now also clones and judges the
+three starter-corpus repos alongside whatever you already had there — more
+wall-clock time and model cost per run, with `--repos` as the only filter.
 
 ```bash
 python -m local_harness.benchmark.run                  # full run: clone + scan + judge + tally
 python -m local_harness.benchmark.run --repos "name"   # single repo (substring match)
 python -m local_harness.benchmark.run --judge-only --force-rejudge   # re-judge without re-scanning
 python -m local_harness.benchmark.run --tally-only     # regenerate the report from saved state
+python -m local_harness.benchmark.run --execute        # let the scan run code (trusted corpora only)
 
 python -m local_harness.benchmark.analyze_misses               # diagnose all missed findings
 python -m local_harness.benchmark.analyze_misses --finding ID  # a single finding

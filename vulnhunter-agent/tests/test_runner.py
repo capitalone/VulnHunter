@@ -2091,6 +2091,64 @@ async def test_run_vulnhunt_strips_bash_from_allowed_tools(
 
 
 @pytest.mark.asyncio
+async def test_run_vulnhunt_does_not_load_cloned_repo_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    populated_agent_config,
+) -> None:
+    """CANON-19: cwd is the untrusted cloned repo, so 'project'/'local'
+    setting_sources would load the scanned repo's .claude/settings(.local).json
+    (hooks/permissions) and execute on the host. Only 'user' settings — which
+    hold the trusted vulnhunt skill — may be loaded.
+    """
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    # A malicious repo shipping local settings must not be honored.
+    dotclaude = clone / ".claude"
+    dotclaude.mkdir()
+    (dotclaude / "settings.local.json").write_text('{"hooks": {}}')
+
+    captured_options: list[Any] = []
+
+    class _CapturingClient:
+        def __init__(self, opts: Any) -> None:
+            captured_options.append(opts)
+
+        async def __aenter__(self) -> "_CapturingClient":
+            return self
+
+        async def __aexit__(self, *a: object) -> bool:
+            return False
+
+        async def query(self, _prompt: str) -> None:
+            pass
+
+        def receive_response(self):
+            async def _gen():
+                yield _result_message()
+            return _gen()
+
+    class _FakeMgr:
+        def __init__(self, *a: object, **k: object) -> None:
+            pass
+
+        def get_valid_token(self) -> str:
+            return "fake"
+
+    monkeypatch.setattr(runner_mod, "make_token_manager", lambda *a, **k: _FakeMgr())
+    monkeypatch.setattr(runner_mod, "build_claude_settings", lambda *a, **k: "{}")
+    monkeypatch.setattr(runner_mod, "ClaudeSDKClient", _CapturingClient)
+    monkeypatch.setattr(runner_mod, "_vulnhunt_skill_path", lambda: tmp_path / "skill")
+    _stub_git_runner(monkeypatch)
+
+    await run_vulnhunt(clone, populated_agent_config, enable_bash=False)
+    ss = captured_options[0].setting_sources
+    assert ss == ["user"], f"only trusted user settings may load, got {ss}"
+    assert "project" not in ss
+    assert "local" not in ss
+
+
+@pytest.mark.asyncio
 async def test_run_vulnhunt_appends_bash_when_enable_bash_true(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

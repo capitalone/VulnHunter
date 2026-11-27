@@ -275,7 +275,13 @@ async def run_verify_session(
         cwd=str(cwd),
         # Same skill discovery path as scan mode — the SDK reads
         # ~/.claude/skills/vulnhunt-fix-verify/SKILL.md.
-        setting_sources=["user", "project", "local"],
+        #
+        # CANON-19: ``cwd`` is the untrusted cloned repo. "project"/"local"
+        # would load that repo's .claude/settings(.local).json (hooks,
+        # permissions) and its skills, executing attacker-controlled config on
+        # the host. Restrict to "user" only — the trusted vulnhunt-fix-verify
+        # skill lives in the user dir, so verify functionality is unaffected.
+        setting_sources=["user"],
         skills="all",
     )
 
