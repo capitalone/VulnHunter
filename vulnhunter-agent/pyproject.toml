@@ -34,6 +34,11 @@ version = { attr = "vulnhunter.__version__" }
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
+# pytest-asyncio >= 1.x warns when this is unset, and filterwarnings = "error"
+# below turns that warning into a fatal INTERNALERROR. "function" matches
+# both the effective current behavior (no async fixtures here set a wider
+# scope) and the documented future default.
+asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "error",
     "ignore::DeprecationWarning:claude_agent_sdk.*",
