@@ -17,8 +17,36 @@ from agent.verify_resolve import (
     ResolveError,
     clone_additional_repo,
     clone_target_repo,
+    repo_identity,
     resolve_repo_hint,
 )
+
+
+# ---------- repo_identity ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/org/repo",
+        "https://github.com/org/repo.git",
+        "https://github.com/Org/Repo/",
+        "https://user@github.com:443/org/repo.git",
+        "ssh://git@github.com/org/repo",
+        "git@github.com:org/repo.git",
+    ],
+)
+def test_repo_identity_collapses_spellings_of_one_repo(url: str) -> None:
+    assert repo_identity(url) == "github.com/org/repo"
+
+
+def test_repo_identity_distinguishes_repos_and_hosts() -> None:
+    assert repo_identity("https://github.com/org/a") != repo_identity(
+        "https://github.com/org/b"
+    )
+    assert repo_identity("https://github.com/org/a") != repo_identity(
+        "https://ghe.example.com/org/a"
+    )
 
 
 # ---------- resolve_repo_hint -----------------------------------------------

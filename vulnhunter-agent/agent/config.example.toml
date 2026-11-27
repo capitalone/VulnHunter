@@ -193,6 +193,11 @@ retries = false
 # verify-specific knobs only.
 scratch_base_dir = "./verify_runs"
 clone_timeout_seconds = 300
+# Max distinct cross-repo references the pre-flight will try to clone per
+# verify run (failed clones count toward the cap). References past the cap
+# are not cloned and are annotated as unverifiable (R6). 0 disables
+# cross-repo cloning; must be >= 0.
+max_additional_repos = 10
 
 # `repo_aliases` maps a free-form `repo_hint` string to a clonable git URL.
 # The agent never infers URLs: resolution is full-URL-or-alias only. When a

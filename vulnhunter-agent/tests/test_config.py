@@ -556,6 +556,42 @@ token_path_prefixes = ["my-org", "my-org/allowed-repo", ""]
         # And the downstream int bounds that follow the tuple fields still resolve.
         assert cfg.verify.max_comment_pages == 20
 
+    _VERIFY_MIN_TOML = """
+[anthropic]
+bedrock_base_url = "https://b"
+model = "m"
+[oauth]
+token_endpoint = "https://o"
+client_id = "x"
+client_secret = "y"
+"""
+
+    def test_verify_max_additional_repos_defaults_to_10(self, tmp_path: Path) -> None:
+        path = tmp_path / "cfg.toml"
+        path.write_text(self._VERIFY_MIN_TOML)
+        assert load_config(path).verify.max_additional_repos == 10
+
+    def test_verify_max_additional_repos_parses_from_toml(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "cfg.toml"
+        path.write_text(self._VERIFY_MIN_TOML + "[verify]\nmax_additional_repos = 25\n")
+        assert load_config(path).verify.max_additional_repos == 25
+
+    def test_verify_max_additional_repos_zero_allowed(self, tmp_path: Path) -> None:
+        # 0 disables cross-repo cloning entirely.
+        path = tmp_path / "cfg.toml"
+        path.write_text(self._VERIFY_MIN_TOML + "[verify]\nmax_additional_repos = 0\n")
+        assert load_config(path).verify.max_additional_repos == 0
+
+    def test_verify_max_additional_repos_negative_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "cfg.toml"
+        path.write_text(self._VERIFY_MIN_TOML + "[verify]\nmax_additional_repos = -1\n")
+        with pytest.raises(ValueError, match="max_additional_repos"):
+            load_config(path)
+
 
 # ---------------------------------------------------------------------------
 # [logging] section
