@@ -381,7 +381,7 @@ Settings in `config.json`. Key options:
 - `verification.max_repair_attempts`: Max repair loop iterations in **fork / headless** mode before escalating to human review (default: 3). In-place mode's collaboration loop is uncapped (see `implement.md`).
 - `behavior.fork_visibility`: Visibility for created forks (default: `private`) — fork mode only
 - `behavior.deliver_to_fork_only`: Never create PRs/issues in target repo (default: true) — fork mode only
-- `behavior.confirm_before_push`: Ask before pushing (default: true) — fork mode only
+- `behavior.confirm_before_push`: Ask before pushing (default: false, as shipped in `config.json`) — fork mode only. This is separate from the mandatory phase-boundary Approve/Pause checkpoints, which apply regardless of this setting.
 - `behavior.work_dir`: Local directory for cloning target repo (default: `./work`) — fork mode only
 - `collaborators_file`: Path to collaborators whitelist (default: `collaborators.json`) — fork mode only
 - `verification.max_retries`: Legacy synonym for `max_repair_attempts` referenced by `headless/` docs; not read by the in-place prompts.

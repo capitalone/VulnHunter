@@ -16,8 +16,27 @@ Requires Python 3.12+ and an authenticated [Claude Code CLI](https://docs.claude
 on PATH — the harness shells out to `claude -p /vulnhunt ...` under the hood. It
 has no other runtime dependencies.
 
-Set the scanning/judging model once in `local_harness/config.py` (the `MODEL`
-constant) to switch models across every workflow.
+Set the scanning/judging model once in `local_harness/config.py` (the
+`DEFAULT_MODEL` constant) to switch models across every workflow, or override it
+for a single run without editing the file:
+
+```bash
+VULNHUNT_HARNESS_MODEL=<model-id> python -m local_harness.batch.run scan
+```
+
+The value is read once at import, so export it before the process starts; a
+blank value is treated as unset. Two things to know before reaching for it:
+
+- `/vulnhunt` is written for Opus-class models and stops with a warning on
+  anything lower (`vulnhunt/SKILL.md`, Step 0). A downgraded run is for
+  exercising the plumbing, not for producing detection numbers.
+- Both resume paths skip targets that already have results, even if the model
+  changes. The benchmark keeps the saved model label when no scan runs,
+  including with `--judge-only` or `--tally-only`. Use `--force-rescan`
+  (benchmark) or a fresh clone (batch) to actually rescan. The benchmark stores
+  one model label for the latest scans, so rescan all targets when switching
+  models to avoid mixing results. A benchmark trial also appends to
+  `finding_history.json`, which is what `--skip-stable` reads.
 
 ## What's inside
 
@@ -63,9 +82,14 @@ dependencies and run exploit tests. Use it only on code you trust.
 
 Ground truth lives in `local_harness/benchmark/ground_truth/*.json` — one file
 per repo, each finding pinned to a public GitHub URL at a specific commit. The
-repo ships only a synthetic `EXAMPLE.json` mapped to public targets (OWASP Juice
-Shop / WebGoat / NodeGoat); **bring your own corpus** by adding
+repo ships a real starter corpus pinned to specific commits of OWASP Juice
+Shop, WebGoat, and NodeGoat; **bring your own corpus** by adding
 `ground_truth/<repo>.json`.
+
+**Upgrading from a version that predates the starter corpus?** `load_all_benchmarks()`
+globs every `*.json` in `ground_truth/`, so a run now also clones and judges the
+three starter-corpus repos alongside whatever you already had there — more
+wall-clock time and model cost per run, with `--repos` as the only filter.
 
 ```bash
 python -m local_harness.benchmark.run                  # full run: clone + scan + judge + tally
