@@ -961,48 +961,139 @@ def test_process_clone_request_duplicate_mentions_do_not_burn_budget(
     assert state.ignored_hints == set()
 
 
-def test_process_clone_request_duplicate_of_failed_clone_is_ignored(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """A second spelling of a repo whose clone already failed is not
-    re-attempted (no extra budget, no extra network clone) but is still
-    recorded in ``ignored_hints`` so the R6 annotation covers claims that
-    cite it under that spelling."""
+def _run_clone_request(monkeypatch, tmp_path, hints, *, ok_urls, aliases=None, cap=5):
+    """Drive _process_clone_request with a fake clone that succeeds only for
+    URLs in ``ok_urls``; return (clone_calls, state)."""
     from agent.verify_resolve import ResolveError
 
     clone_calls: list[str] = []
 
     def fake_clone(url, clone_root, **kwargs):
         clone_calls.append(url)
-        raise ResolveError(f"repository not found: {url}")
+        if url not in ok_urls:
+            raise ResolveError(f"clone failed: {url}")
+        p = Path(clone_root)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
 
     monkeypatch.setattr(verify_module, "clone_additional_repo", fake_clone)
     state = verify_module._RunState()
-
     verify_module._process_clone_request(
-        {
-            "requested_sources": [
-                {"repo_hint": "https://github.com/org/gone"},
-                {"repo_hint": "https://github.com/org/gone.git"},
-                {"repo_hint": "gone"},
-            ]
-        },
+        {"requested_sources": [{"repo_hint": h} for h in hints]},
         state=state,
         github_token="x",
         github_host="github.com",
         timeout_seconds=1,
         additional_repos_dir=tmp_path / "additional_repos",
-        aliases={"gone": "git@github.com:org/gone.git"},
+        aliases=aliases or {},
         allowed_hosts=("github.com",),
-        max_additional_repos=5,
+        max_additional_repos=cap,
     )
+    return clone_calls, state
 
-    assert clone_calls == ["https://github.com/org/gone"]
-    assert state.ignored_hints == {
+
+def test_process_clone_request_failed_spelling_does_not_block_working_one(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Clone failures depend on the URL (transport, credentials, port), not
+    the repo. An SSH spelling that fails on a keyless runner, listed first,
+    must not stop a later HTTPS spelling of the same repo from cloning. The
+    failed spelling is then withdrawn from ignored_hints, since R6 would
+    otherwise reject claims citing the repo by substring match."""
+    calls, state = _run_clone_request(
+        monkeypatch,
+        tmp_path,
+        ["git@github.com:acme/shared-lib.git", "https://github.com/acme/shared-lib"],
+        ok_urls={"https://github.com/acme/shared-lib"},
+    )
+    assert calls == [
+        "git@github.com:acme/shared-lib.git",
+        "https://github.com/acme/shared-lib",
+    ]
+    assert len(state.additional_repos) == 1
+    assert state.ignored_hints == set()
+
+
+def test_process_clone_request_failed_alias_retried_by_later_spelling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Same rule when the working spelling arrives via an alias."""
+    calls, state = _run_clone_request(
+        monkeypatch,
+        tmp_path,
+        ["https://github.com/Acme/shared-lib", "shared-lib"],
+        ok_urls={"https://github.com/acme/shared-lib.git"},
+        aliases={"shared-lib": "https://github.com/acme/shared-lib.git"},
+    )
+    assert len(calls) == 2
+    assert len(state.additional_repos) == 1
+    assert state.ignored_hints == set()
+
+
+def test_process_clone_request_all_spellings_fail_each_charged_and_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """When every spelling fails, each is attempted (charging the budget)
+    and each is recorded in ignored_hints for R6."""
+    hints = [
         "https://github.com/org/gone",
         "https://github.com/org/gone.git",
         "gone",
+    ]
+    calls, state = _run_clone_request(
+        monkeypatch,
+        tmp_path,
+        hints,
+        ok_urls=set(),
+        aliases={"gone": "git@github.com:org/gone.git"},
+    )
+    assert calls == [
+        "https://github.com/org/gone",
+        "https://github.com/org/gone.git",
+        "git@github.com:org/gone.git",
+    ]
+    assert state.ignored_hints == set(hints)
+
+
+def test_process_clone_request_failing_spellings_still_bounded_by_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Retrying failed spellings cannot exceed the attempt cap: past it, the
+    remaining spellings (and other repos) are skipped and recorded for R6."""
+    hints = [f"https://github.com:{9000 + i}/org/gone" for i in range(5)]
+    hints.append("https://github.com/org/other")
+    calls, state = _run_clone_request(
+        monkeypatch, tmp_path, hints, ok_urls=set(), cap=3
+    )
+    assert len(calls) == 3
+    assert state.ignored_hints == set(hints)
+
+
+def test_process_clone_request_spelling_after_cap_skip_is_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A repo skipped by the cap stays skipped under every later spelling
+    (no clone), and each spelling is recorded for R6."""
+    calls, state = _run_clone_request(
+        monkeypatch,
+        tmp_path,
+        [
+            "https://github.com/org/a",
+            "https://github.com/org/b",
+            "https://github.com/org/b.git",
+        ],
+        ok_urls={"https://github.com/org/a", "https://github.com/org/b"},
+        cap=1,
+    )
+    assert calls == ["https://github.com/org/a"]
+    assert state.ignored_hints == {
+        "https://github.com/org/b",
+        "https://github.com/org/b.git",
     }
 
 
