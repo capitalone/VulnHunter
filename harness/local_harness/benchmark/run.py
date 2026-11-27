@@ -22,6 +22,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -46,6 +47,55 @@ from .tally import (
 from .finding_history import get_stable_findings, update_history
 
 
+_REQUIRED_FIELDS = {"finding_id", "type", "source_code", "description"}
+# Exact shape parse_source_url() expects after its own url.rstrip("/"):
+# https://github.com/{org}/{repo}/tree/{commit_hash}, hash hex-only, no trailing
+# segments. A substring check ("/tree/" in url) lets malformed URLs through that
+# then mis-parse (e.g. ".../tree/" -> hash "tree"; ".../tree/abc/sub/file.py" ->
+# hash "file.py") and fail later at clone time instead of here.
+_SOURCE_URL_RE = re.compile(r"^https://github\.com/[^/]+/[^/]+/tree/[0-9a-fA-F]+$")
+
+
+def _validate_benchmarks(benchmarks):
+    """Validate all loaded benchmark findings before any network I/O.
+
+    Returns a list of error strings. Empty list means all clear.
+    """
+    errors = []
+    seen_ids = {}
+    for filename, findings in benchmarks:
+        if not isinstance(findings, list):
+            errors.append(f"{filename}: top-level value must be a JSON array")
+            continue
+        for i, finding in enumerate(findings):
+            loc = f"{filename}[{i}]"
+            if not isinstance(finding, dict):
+                errors.append(f"{loc}: each entry must be a JSON object, got {type(finding).__name__}")
+                continue
+            missing = _REQUIRED_FIELDS - set(finding.keys())
+            if missing:
+                errors.append(f"{loc}: missing required fields: {', '.join(sorted(missing))}")
+                continue
+            fid = finding["finding_id"]
+            if not isinstance(fid, str):
+                errors.append(f"{loc}: finding_id must be a string, got {type(fid).__name__}")
+                continue
+            if fid in seen_ids:
+                errors.append(f"{loc}: duplicate finding_id '{fid}' (also in {seen_ids[fid]})")
+            else:
+                seen_ids[fid] = filename
+            url = finding["source_code"]
+            if not isinstance(url, str):
+                errors.append(f"{loc} ({fid}): source_code must be a string, got {type(url).__name__}")
+                continue
+            if not _SOURCE_URL_RE.match(url.rstrip("/")):
+                errors.append(
+                    f"{loc} ({fid}): source_code must be "
+                    f"https://github.com/{{org}}/{{repo}}/tree/{{commit_hash}}, got: {url!r}"
+                )
+    return errors
+
+
 def load_all_benchmarks():
     """Load all benchmark JSON files.
 
@@ -53,16 +103,32 @@ def load_all_benchmarks():
     _repo_url, _repo_name, _commit_hash fields added.
     """
     results = []
+    errors = []
     pattern = os.path.join(BENCHMARK_DIR, "*.json")
     for json_file in sorted(glob.glob(pattern)):
+        filename = os.path.basename(json_file)
         with open(json_file) as f:
-            findings = json.load(f)
+            try:
+                findings = json.load(f)
+            except json.JSONDecodeError as e:
+                errors.append(f"{filename}: invalid JSON: {e}")
+                continue
+        results.append((filename, findings))
+
+    errors += _validate_benchmarks(results)
+    if errors:
+        print("Error: benchmark corpus validation failed:")
+        for err in errors:
+            print(f"  {err}")
+        sys.exit(1)
+
+    for _, findings in results:
         for finding in findings:
             repo_url, repo_name, commit_hash = parse_source_url(finding["source_code"])
             finding["_repo_url"] = repo_url
             finding["_repo_name"] = repo_name
             finding["_commit_hash"] = commit_hash
-        results.append((os.path.basename(json_file), findings))
+
     return results
 
 
