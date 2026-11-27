@@ -50,9 +50,11 @@ if [ "$DO_FORK" = "true" ]; then
     FORK_FULL="$(gh api user --jq '.login')/${FORK_REPO_NAME}"
   fi
 
-  # Set fork to private
+  # Set fork to private. Not suppressing the exit code here: a failed
+  # visibility edit must abort (same as a failed fork above), not fall
+  # through to cloning and reporting false private-fork success.
   echo "Setting fork to private..."
-  gh repo edit "$FORK_FULL" --visibility private --accept-visibility-change-consequences 2>&1 || true
+  gh repo edit "$FORK_FULL" --visibility private --accept-visibility-change-consequences 2>&1
 
   # Enable issues
   gh repo edit "$FORK_FULL" --enable-issues 2>&1 || true
