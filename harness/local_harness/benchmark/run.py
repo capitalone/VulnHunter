@@ -101,7 +101,7 @@ def load_state():
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             print(f"  WARNING: {STATE_FILE} is corrupt, starting fresh")
-    return {"scan_targets": {}, "judgments": {}, "model": MODEL}
+    return {"scan_targets": {}, "judgments": {}, "model": "unknown"}
 
 
 def save_state(state):
@@ -195,6 +195,7 @@ def phase_scan(targets, state, force_rescan=False, max_workers=MAX_SCAN_WORKERS,
     print(f"{'='*60}")
 
     results = scan_targets(to_scan, max_workers=max_workers, readonly=not execute)
+    state["model"] = MODEL
 
     for target_key, r in results:
         if r.returncode == 0 and r.results_dir:
@@ -427,7 +428,6 @@ def main():
 
     # Load state
     state = load_state()
-    state["model"] = MODEL
 
     # Execute phases based on flags
     if args.tally_only:
