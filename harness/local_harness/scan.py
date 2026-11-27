@@ -521,7 +521,14 @@ def scan_folder(folder_path, log_file=None, readonly=True):
               f"(exit {proc.returncode}, {event_count} events{cost_str}{tokens_str})", flush=True)
 
     # The dir is pre-created, so report it only once the scan wrote something.
+    # A scan that wrote nothing leaves it empty; remove it so batch collection
+    # does not take the failed scan for a result.
     if not os.listdir(results_dir):
+        try:
+            os.rmdir(results_dir)
+        except OSError:
+            # An --execute agent may have removed or replaced it already.
+            pass
         results_dir = None
     return ScanResult(folder_path, label, proc.returncode, event_count, elapsed, results_dir, cost_data)
 
