@@ -1,0 +1,15 @@
+{
+  "vulnhunt-fix-verify/SKILL.md": "27b12cc90b13eb8773a150dc722e4f909df071106c383a24103a37ad2810f36a",
+  "vulnhunt-fix-verify/phases/phase0_preflight.md": "faa2671566513b2aaf46fda142c4a51f15020d883634343225ee25d160297cea",
+  "vulnhunt-fix-verify/phases/phase2_verify.md": "10eae9b17913a3e219050f95daa06645d4ca51b4faf9f76cf49cea361f36e2b2",
+  "vulnhunt-fix-verify/phases/phase4_emit.md": "cc36e1a5f106182493962b85290c6858e43425a2822422755470ffe84f479546",
+  "vulnhunt/SKILL.md": "02e3704cedf5157ed6c3bee672d218a20ccc6d415800180ef24c1dd313c50b68",
+  "vulnhunt/phases/phase1_recon.md": "077abcb37f6d98f9212e75a5451bcdceed93a1657c37060145ac5207e5661869",
+  "vulnhunt/phases/phase2_hunt.md": "394754aef2dfd9f0f72d901d5529dd857d260f1ef02bd39c13c8478f5dcac45b",
+  "vulnhunt/phases/phase2_shared.md": "15a3b1455d4de419769a9fbb982fb2851098e75dbd8628f588ce6f2963590161",
+  "vulnhunt/phases/phase3_reproduce_test.md": "3262604019d74937fda581392bfa90daa2effb6ab84b5458d8d8ad5df9fb55a1",
+  "vulnhunt/phases/phase3d_sweep.md": "c9ce0ee39223b45a6c6ff2cb8af3688d8f2aa336c3e1306fb16ca704a3e1ed7e",
+  "vulnhunt/phases/phase4_report.md": "1954d7267c8af55471f93b0a55f37af948bcaedfb35da16088ee2813612c1b03",
+  "vulnhunter-fix/SKILL.md": "836f159392032cd054388552b911873ddef672e0004783778d1cb39e685fb69e",
+  "vulnhunter-fix/prompts/parse_issues.md": "e49d77413e56b5f74c05fced7717017c560521528f449cf97762fbd1ec8c26b0"
+}
