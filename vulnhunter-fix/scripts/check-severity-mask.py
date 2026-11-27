@@ -29,10 +29,11 @@ _CONFUSABLES = {
     0x043E: "o", 0x041E: "O",   # Cyrillic o
     0x0440: "p", 0x0420: "P",   # Cyrillic er
     0x0455: "s", 0x0405: "S",   # Cyrillic dze
-    0x0442: "t",                # Cyrillic te ~ 't' (cover every letter of "critical")
-    0x04C0: "l",                # Cyrillic palochka ~ 'l'
+    0x0442: "t", 0x0422: "T",   # Cyrillic te (cover every letter of "critical", both cases)
+    0x04C0: "l", 0x04CF: "l",   # Cyrillic palochka, capital and small ~ 'l'
     0x0280: "r",                # Latin letter small capital r ~ 'r'
     0x03B1: "a", 0x03BF: "o", 0x0399: "I", 0x03F2: "c",  # Greek
+    0x03A4: "T", 0x0391: "A",   # Greek capital tau, capital alpha
 }
 
 
