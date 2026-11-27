@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -44,10 +45,10 @@ class TestDeriveRepoName:
 
 
 class _FakeCompleted:
-    def __init__(self, returncode: int = 0) -> None:
+    def __init__(self, returncode: int = 0, stderr: str = "") -> None:
         self.returncode = returncode
         self.stdout = ""
-        self.stderr = ""
+        self.stderr = stderr
 
 
 @pytest.fixture
@@ -142,11 +143,15 @@ class TestShallowClone:
         def fake_run(cmd: list[str], **kwargs: Any) -> _FakeCompleted:
             target = Path(cmd[-1])
             target.mkdir(parents=True, exist_ok=True)
-            return _FakeCompleted(returncode=128)
+            return _FakeCompleted(
+                returncode=128,
+                stderr="fatal: repository 'https://github.com/org/myrepo' not found",
+            )
 
         monkeypatch.setattr(clone_mod.subprocess, "run", fake_run)
-        with pytest.raises(RuntimeError, match="git clone failed"):
+        with pytest.raises(RuntimeError, match="git clone failed") as exc:
             shallow_clone("https://github.com/org/myrepo", tmp_path)
+        assert "repository" in str(exc.value)
         assert not (tmp_path / "myrepo").exists()
 
     def test_git_terminal_prompt_env_set(
@@ -244,6 +249,29 @@ class TestShallowClone:
         assert "secret" not in msg
         assert "***@github.com" in msg
 
+    def test_stderr_redacted_in_error_message(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def fake_run(cmd: list[str], **kwargs: Any) -> _FakeCompleted:
+            target = Path(cmd[-1])
+            target.mkdir(parents=True, exist_ok=True)
+            return _FakeCompleted(
+                returncode=128,
+                stderr="fatal: Authentication failed for 'https://x-access-token:ghp_SECRET@github.com/org/repo'",
+            )
+
+        monkeypatch.setattr(clone_mod.subprocess, "run", fake_run)
+        with pytest.raises(RuntimeError) as exc:
+            shallow_clone(
+                "https://github.com/org/repo",
+                tmp_path,
+            )
+        msg = str(exc.value)
+        assert "ghp_SECRET" not in msg
+        assert "Authentication failed" in msg
+
     def test_url_redacted_in_timeout_error_message(
         self,
         tmp_path: Path,
@@ -306,5 +334,47 @@ class TestShallowClone:
             "https://github.com/org/myrepo",
             tmp_path,
         )
-        assert captured[0][0] == "/usr/bin/git"
-        assert captured[0][1] == "clone"
+        assert captured[0] == [
+            "/usr/bin/git", "clone", "--depth", "1",
+            "--", "https://github.com/org/myrepo", str(tmp_path / "myrepo"),
+        ]
+
+    def test_stderr_bounded_in_error_message(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        long_spam = "remote: spam\n" * 500
+        fatal = "fatal: repository 'https://github.com/org/myrepo' not found"
+
+        def fake_run(cmd: list[str], **kwargs: Any) -> _FakeCompleted:
+            target = Path(cmd[-1])
+            target.mkdir(parents=True, exist_ok=True)
+            return _FakeCompleted(returncode=128, stderr=long_spam + fatal)
+
+        monkeypatch.setattr(clone_mod.subprocess, "run", fake_run)
+        with pytest.raises(RuntimeError) as exc:
+            shallow_clone("https://github.com/org/myrepo", tmp_path)
+        msg = str(exc.value)
+        assert len(msg) <= 2200
+        assert "repository" in msg
+        assert "not found" in msg
+
+    def test_success_stderr_logged(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        def fake_run(cmd: list[str], **kwargs: Any) -> _FakeCompleted:
+            target = Path(cmd[-1])
+            target.mkdir(parents=True, exist_ok=True)
+            return _FakeCompleted(
+                returncode=0,
+                stderr="warning: remote HEAD refers to nonexistent ref\n",
+            )
+
+        monkeypatch.setattr(clone_mod.subprocess, "run", fake_run)
+        with caplog.at_level(logging.DEBUG, logger="agent.clone"):
+            shallow_clone("https://github.com/org/myrepo", tmp_path)
+        assert any("remote HEAD" in r.message for r in caplog.records)
