@@ -4,9 +4,13 @@ Exercises the real script as a subprocess (mocked gh/git on PATH), same
 approach as test_detect_mode_sh.py, so we test the canonical bash
 implementation rather than a Python re-derivation of it.
 
-Covers the bug from issue #45: a rejected `gh repo edit --visibility
-private` must abort the helper, not fall through to cloning and
-reporting false private-fork success.
+Covers two bugs:
+- #45: a rejected `gh repo edit --visibility private` must abort the
+  helper, not fall through to cloning and reporting false private-fork
+  success.
+- #65: forking a PUBLIC upstream must be rejected before `gh repo fork`
+  is ever called (GitHub can't make such a fork private, so attempting
+  it always fails downstream anyway, leaving an orphaned public fork).
 """
 
 from __future__ import annotations
@@ -21,7 +25,11 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "clone_repo.sh"
 
 GH_MOCK = """#!/bin/bash
 case "$*" in
-  'repo fork '*) exit 0;;
+  'repo view '*)
+    echo "$MOCK_UPSTREAM_VISIBILITY";;
+  'repo fork '*)
+    touch "$MOCK_FORK_CALLED_MARKER"
+    exit 0;;
   'repo edit '*--visibility*)
     if [ "$MOCK_VISIBILITY_EXIT" = "0" ]; then exit 0; fi
     echo 'mock: visibility edit rejected' >&2
@@ -51,14 +59,20 @@ def _mock_bin_dir(tmp_path: Path) -> Path:
     return bin_dir
 
 
-def _run(tmp_path: Path, visibility_edit_exit: int) -> subprocess.CompletedProcess[str]:
+def _run(
+    tmp_path: Path,
+    visibility_edit_exit: int = 0,
+    upstream_visibility: str = "PRIVATE",
+) -> subprocess.CompletedProcess[str]:
     bin_dir = _mock_bin_dir(tmp_path)
-    target_dir = tmp_path / f"clone-{visibility_edit_exit}"
+    target_dir = tmp_path / f"clone-{visibility_edit_exit}-{upstream_visibility}"
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:/usr/bin:/bin"
     env["VULNFIX_SKILL_DIR"] = str(tmp_path / "empty-skill")
-    (tmp_path / "empty-skill").mkdir()
+    (tmp_path / "empty-skill").mkdir(exist_ok=True)
     env["MOCK_VISIBILITY_EXIT"] = str(visibility_edit_exit)
+    env["MOCK_UPSTREAM_VISIBILITY"] = upstream_visibility
+    env["MOCK_FORK_CALLED_MARKER"] = str(tmp_path / "fork_called")
     return subprocess.run(
         [
             "bash",
@@ -92,3 +106,26 @@ def test_accepted_visibility_edit_still_reports_private_success(tmp_path):
     assert result.returncode == 0, result.stderr
     assert '"status": "ok"' in result.stdout
     assert '"visibility": "private"' in result.stdout
+
+
+def test_public_upstream_rejected_before_forking(tmp_path):
+    result = _run(tmp_path, upstream_visibility="PUBLIC")
+
+    assert result.returncode != 0, (
+        "forking a public upstream must be rejected, not attempted: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert '"status": "error"' in result.stdout
+    assert "public" in result.stdout.lower()
+    assert not (tmp_path / "fork_called").exists(), (
+        "gh repo fork must never be called once the upstream is known to be public"
+    )
+
+
+def test_private_upstream_still_proceeds_to_fork(tmp_path):
+    result = _run(tmp_path, visibility_edit_exit=0, upstream_visibility="PRIVATE")
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "fork_called").exists(), (
+        "gh repo fork should still run normally for a private upstream"
+    )
