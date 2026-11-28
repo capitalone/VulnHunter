@@ -28,6 +28,17 @@ OWNER_REPO=$(echo "$REPO_URL" | sed -E 's|.*github\.com[:/]||; s|\.git$||; s|/tr
 REPO_NAME=$(basename "$OWNER_REPO")
 
 if [ "$DO_FORK" = "true" ]; then
+  # A fork of a public repo can never be made private after the fact --
+  # GitHub does not allow changing a fork's visibility independently of
+  # forking it in the first place. Detect that up front so we fail before
+  # creating any fork, instead of creating an (orphaned) public fork and
+  # then aborting moments later on the visibility edit.
+  UPSTREAM_VISIBILITY="$(GH_HOST="$GH_HOST" gh repo view "$OWNER_REPO" --json visibility --jq '.visibility')"
+  if [ "$UPSTREAM_VISIBILITY" = "PUBLIC" ]; then
+    echo "{\"status\": \"error\", \"message\": \"${OWNER_REPO} is public. GitHub does not allow making a fork of a public repo private, so fork mode cannot provide the privacy guarantee it promises here. Use in-place mode instead, or pass --fork-org pointing at an org configured for private-by-default repos.\"}"
+    exit 1
+  fi
+
   # Determine fork name
   FORK_REPO_NAME="${REPO_NAME}"
   if [ -n "$FORK_PREFIX" ]; then
